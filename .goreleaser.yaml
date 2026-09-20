@@ -33,7 +33,7 @@ archives:
       - LICENSE
 
 aurs:
-  - name: shelf-bin
+  - name: shelf
     homepage: https://github.com/rubiin/shelf
     description: Fast, configurable shell plugin manager written in Go.
     license: GPL-3.0-only
