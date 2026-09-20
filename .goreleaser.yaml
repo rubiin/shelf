@@ -7,14 +7,15 @@ before:
     # Generate shell completion scripts once, ahead of all builds, so they
     # can be bundled into archives and installed by the AUR package.
     - mkdir -p .buildcache/completions
-    - sh -c 'go run . completion bash > .buildcache/completions/shelf.bash'
-    - sh -c 'go run . completion zsh > .buildcache/completions/_shelf'
-    - sh -c 'go run . completion fish > .buildcache/completions/shelf.fish'
-    - sh -c 'go run . completion pwsh > .buildcache/completions/_shelf.ps1'
+    - sh -c 'go run ./cmd/shelf completion bash > .buildcache/completions/shelf.bash'
+    - sh -c 'go run ./cmd/shelf completion zsh > .buildcache/completions/_shelf'
+    - sh -c 'go run ./cmd/shelf completion fish > .buildcache/completions/shelf.fish'
+    - sh -c 'go run ./cmd/shelf completion pwsh > .buildcache/completions/_shelf.ps1'
 
 builds:
   - env:
       - CGO_ENABLED=0
+    main: ./cmd/shelf
     # main.go declares `version`; release builds override it here.
     ldflags:
       - -s -w
