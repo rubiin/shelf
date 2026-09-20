@@ -101,13 +101,41 @@ Add the `eval` command to `.bashrc` or `.zshrc`.
 
 ## Build and test
 
-Requirements: Go 1.23 or newer and Git for Git sources.
+Requirements: Go 1.26 or newer and Git for Git sources.
 
 ```sh
 go build ./cmd/shelf
 go test ./...
 go vet ./...
 ```
+
+## Benchmarks
+
+`scripts/bench-vs-sheldon.sh` compares `shelf source` with `sheldon source`. It
+builds shelf, writes one config into a temporary `HOME` that both tools read,
+locks both, checks that the rendered script is identical, and then measures
+three commands with [hyperfine](https://github.com/sharkdp/hyperfine): process
+startup, `source` with a warm lock, and `eval "$(… source)"` in a shell. Your
+real config and data directories are never touched.
+
+```sh
+just bench              # 20 plugins, 100 runs
+just bench runs=25      # fewer runs
+./scripts/bench-vs-sheldon.sh --plugins 60 --export bench.md
+```
+
+Measured on a Ryzen 7 5700U with hyperfine 1.20.0, sheldon 0.8.5, and a config
+of 20 plugins (12 local, 8 inline):
+
+| command | sheldon | shelf |
+| --- | --- | --- |
+| startup (`version`) | 13.4 ms | 5.6 ms |
+| `source`, warm lock | 14.5 ms | 7.3 ms |
+| `eval "$(… source)"` in bash | 16.9 ms | 10.2 ms |
+
+Both tools render the same script, so the difference is overhead: sheldon
+spends most of its time before it reads the config, while shelf reads, verifies,
+and renders in less than sheldon takes to start.
 
 ## Command-line interface
 

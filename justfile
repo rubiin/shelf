@@ -13,6 +13,10 @@ build:
 size: build
     @du -h shelf | cut -f1
 
+# Benchmark `shelf source` against `sheldon source` with hyperfine
+bench plugins="20" runs="100":
+    ./scripts/bench-vs-sheldon.sh --plugins {{plugins}} --runs {{runs}}
+
 # Run all tests
 test:
     go test ./...

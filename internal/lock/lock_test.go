@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -96,17 +97,13 @@ func TestBuildRejectsNonPositiveConcurrency(t *testing.T) {
 }
 
 func TestRestoreInstallsRevisionsInParallel(t *testing.T) {
-	cfg := config.Config{Plugins: map[string]config.RawPlugin{
-		"first":  {GitHub: "rubiin/first"},
-		"second": {GitHub: "rubiin/second"},
-	}}
 	locked := LockedConfig{Plugins: []LockedPlugin{
-		{Name: "first", Rev: "aaaaaaaa"},
-		{Name: "second", Rev: "bbbbbbbb"},
+		{Name: "first", URL: "https://github.com/rubiin/first", Rev: "aaaaaaaa"},
+		{Name: "second", URL: "https://github.com/rubiin/second", Rev: "bbbbbbbb"},
 	}}
 	installer := blockingInstaller{directory: t.TempDir(), started: make(chan struct{}, 2), release: make(chan struct{})}
 	finished := make(chan error, 1)
-	go func() { finished <- Restore(cfg, installer, locked, DefaultConcurrency) }()
+	go func() { finished <- Restore(locked, installer, DefaultConcurrency) }()
 	for range 2 {
 		select {
 		case <-installer.started:
@@ -122,11 +119,10 @@ func TestRestoreInstallsRevisionsInParallel(t *testing.T) {
 }
 
 func TestRestoreSkipsPluginsWithoutPinnedRevisions(t *testing.T) {
-	// A plugin without a pinned rev, or one no longer configured as Git, is skipped.
-	cfg := config.Config{Plugins: map[string]config.RawPlugin{"local": {Local: "/tmp/plugins"}}}
+	// A plugin without a pinned rev, and one whose source is not a git clone, are both skipped.
 	locked := LockedConfig{Plugins: []LockedPlugin{{Name: "local"}, {Name: "gone", Rev: "aaaaaaaa"}}}
 	installer := &countingInstaller{}
-	if err := Restore(cfg, installer, locked, DefaultConcurrency); err != nil {
+	if err := Restore(locked, installer, DefaultConcurrency); err != nil {
 		t.Fatal(err)
 	}
 	if installer.calls != 0 {
@@ -244,6 +240,14 @@ func TestBuildSelectsConfiguredPluginFile(t *testing.T) {
 	}
 }
 
+// directoryOnlyInstaller installs a directory without pinning a single file, leaving file selection
+// to the `use` patterns.
+type directoryOnlyInstaller struct{ directory string }
+
+func (installer directoryOnlyInstaller) Install(context.Context, source.Request) (source.Installed, error) {
+	return source.Installed{Directory: installer.directory}, nil
+}
+
 type countingInstaller struct {
 	calls int
 }
@@ -315,5 +319,27 @@ func TestVerifyRejectsLockWithoutTemplates(t *testing.T) {
 	ctx := Context{ConfigFingerprint: "fingerprint", Shell: "zsh"}
 	if valid, err := Verify(path, ctx); err != nil || valid {
 		t.Fatalf("verify = %v, err = %v", valid, err)
+	}
+}
+
+func TestBuildUnionsEveryUsePattern(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"demo.plugin.zsh", "demo.extra.sh", "other.zsh"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("echo "+name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "rubiin/demo", Use: []string{"demo.*.zsh", "demo.*.sh"}},
+	}}
+
+	locked, err := Build(Context{Shell: "zsh"}, cfg, directoryOnlyInstaller{directory: directory}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both patterns are walked together, so the selection is ordered by file name.
+	want := []string{filepath.Join(directory, "demo.extra.sh"), filepath.Join(directory, "demo.plugin.zsh")}
+	if len(locked.Plugins) != 1 || !slices.Equal(locked.Plugins[0].Files, want) {
+		t.Fatalf("selected files = %v, want %v", locked.Plugins[0].Files, want)
 	}
 }

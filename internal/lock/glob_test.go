@@ -193,7 +193,8 @@ func TestSelectFilesDeduplicatesExplicitMatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{filepath.Join(directory, "demo.zsh"), filepath.Join(directory, "demo.sh")}
+	// Overlapping patterns select a file once, ordered by file name across every pattern.
+	want := []string{filepath.Join(directory, "demo.sh"), filepath.Join(directory, "demo.zsh")}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

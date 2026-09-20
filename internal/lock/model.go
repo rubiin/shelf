@@ -31,8 +31,10 @@ type LockedConfig struct {
 type LockedPlugin struct {
 	Name string `toml:"name"`
 	// Inline holds an inline plugin's text, which is rendered instead of sourced from files.
-	Inline    string            `toml:"inline,omitempty"`
-	Source    string            `toml:"source,omitempty"`
+	Inline string `toml:"inline,omitempty"`
+	Source string `toml:"source,omitempty"`
+	// URL is the resolved clone URL, which lets Restore reinstall the revision from the lock alone.
+	URL       string            `toml:"url,omitempty"`
 	Rev       string            `toml:"rev,omitempty"`
 	Directory string            `toml:"directory,omitempty"`
 	Files     []string          `toml:"files,omitempty"`

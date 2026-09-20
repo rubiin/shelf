@@ -135,8 +135,10 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	} else if installed.File != "" {
 		files = []string{installed.File}
 	} else {
+		// `use` lists every pattern to select from, while global matches stop at the first pattern
+		// that selects anything.
 		patterns := plugin.Use
-		firstMatch := len(patterns) > 0
+		firstMatch := false
 		if len(patterns) == 0 {
 			patterns = cfg.Matches
 			if len(patterns) == 0 {
@@ -156,29 +158,23 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if len(apply) == 0 {
 		apply = []string{"source"}
 	}
-	return LockedPlugin{Name: name, Source: pluginSource(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks}, nil
+	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks}, nil
 }
 
-// Restore reinstalls the pinned revisions through the same worker pool as locking.
-func Restore(cfg config.Config, installer source.Installer, locked LockedConfig, concurrency int) error {
+// Restore reinstalls the revisions the lock pinned, using only the lock so a caller that holds a
+// valid lock never parses the config. It runs through the same worker pool as locking.
+func Restore(locked LockedConfig, installer source.Installer, concurrency int) error {
 	var tasks []LockedPlugin
 	for _, plugin := range locked.Plugins {
-		if plugin.Rev == "" {
-			continue
-		}
-		configured, exists := cfg.Plugins[plugin.Name]
-		if !exists || !isGit(configured) {
+		// Only git sources record a URL; a lock written before URLs were recorded is left as it is.
+		if plugin.Rev == "" || plugin.URL == "" {
 			continue
 		}
 		tasks = append(tasks, plugin)
 	}
 	return runConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin := tasks[index]
-		configured := cfg.Plugins[plugin.Name]
-		if _, err := installer.Install(installContext, source.Request{
-			Name: plugin.Name, Git: configured.Git, GitHub: configured.GitHub, Gist: configured.Gist, Proto: configured.Proto,
-			Ref: plugin.Rev, Dir: configured.Dir,
-		}); err != nil {
+		if _, err := installer.Install(installContext, source.Request{Name: plugin.Name, Git: plugin.URL, Ref: plugin.Rev}); err != nil {
 			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
 		}
 		return nil
@@ -200,6 +196,14 @@ func pluginSource(plugin config.RawPlugin) string {
 
 func isGit(plugin config.RawPlugin) bool {
 	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != ""
+}
+
+// pluginCloneURL resolves a git source's clone URL, which the lock records so Restore needs no config.
+func pluginCloneURL(plugin config.RawPlugin) string {
+	if !isGit(plugin) {
+		return ""
+	}
+	return source.CloneURL(source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto})
 }
 
 // PluginNames returns plugin names in declaration order, then remaining names sorted.

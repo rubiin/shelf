@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"shelf/internal/lock"
 	"shelf/internal/source"
 	"shelf/internal/tui"
 )
@@ -942,5 +943,84 @@ func TestLockDiagnosticsIncludeDottedKeyPlugins(t *testing.T) {
 	}
 	if got := checkedSources(stderr.String()); !slices.Equal(got, []string{"inline"}) {
 		t.Fatalf("checked sources = %q, want [inline]", got)
+	}
+}
+
+func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
+	// The lock covers these exact bytes, so the hot path renders without decoding them.
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	contents := []byte("shell = zsh\n\n[plugins.demo\ninline = \"echo demo\"\n")
+	if err := os.WriteFile(configFile, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(directory, "data")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	locked := lock.LockedConfig{
+		ConfigFingerprint: fingerprintWithShell(contents),
+		Shell:             "zsh",
+		Templates:         map[string]string{"source": "source \"{{ files.0 }}\"\n"},
+		Plugins:           []lock.LockedPlugin{{Name: "demo", Inline: "echo demo"}},
+	}
+	if err := lock.Write(filepath.Join(dataDir, "plugins.lock"), locked); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"source"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "echo demo\n" {
+		t.Fatalf("source output = %q", output.String())
+	}
+}
+
+func TestSourceRelocksWhenTheShellOverrideChanges(t *testing.T) {
+	// SHELF_SHELL only matters when the config omits `shell`, and the lock remembers which shell
+	// built it, so dropping the override has to relock rather than keep rendering bash code.
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	if err := os.WriteFile(configFile, []byte("[plugins.demo]\ninline = \"echo demo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(directory, "data")
+	lockPath := filepath.Join(dataDir, "plugins.lock")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+	t.Setenv("SHELF_SHELL", "bash")
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := lock.Read(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked.Shell != "bash" {
+		t.Fatalf("locked shell = %q, want bash", locked.Shell)
+	}
+
+	t.Setenv("SHELF_SHELL", "")
+	if err := Execute([]string{"source"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	relocked, err := lock.Read(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relocked.Shell != "zsh" {
+		t.Fatalf("shell after dropping the override = %q, want zsh", relocked.Shell)
 	}
 }

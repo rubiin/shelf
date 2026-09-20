@@ -358,7 +358,8 @@ func loadSourceInputs(paths Paths) (sourceInputs, error) {
 }
 
 // renderScript writes the shell code for a verified lock file, reporting each plugin when verbose.
-func renderScript(output io.Writer, locked lock.LockedConfig, inputs sourceInputs, diagnostics io.Writer) error {
+// The lock records the shell and the resolved templates, so rendering needs nothing from the config.
+func renderScript(output io.Writer, locked lock.LockedConfig, diagnostics io.Writer) error {
 	log := newLogger(diagnostics)
 	for _, plugin := range locked.Plugins {
 		if plugin.Inline != "" {
@@ -367,13 +368,39 @@ func renderScript(output io.Writer, locked lock.LockedConfig, inputs sourceInput
 		}
 		log.verboseStatus("Rendered", plugin.Name)
 	}
-	// The lock records the resolved templates, so only the config's own templates are passed along.
-	script, err := render.Script(locked, inputs.Shell)
+	script, err := render.Script(locked, locked.Shell)
 	if err != nil {
 		return err
 	}
 	_, err = io.WriteString(output, script)
 	return err
+}
+
+// fingerprintWithShell hashes the config bytes together with the shell override, so a lock taken under
+// a different SHELF_SHELL is stale even though the config file itself did not change.
+func fingerprintWithShell(contents []byte) string {
+	return lock.Fingerprint([]byte(lock.Fingerprint(contents) + "\n" + os.Getenv("SHELF_SHELL")))
+}
+
+// unlockedLock reads the lock and verifies it against the config's fingerprint without decoding the
+// config, which is the shell-startup path. A caller that gets false relocks through the full path.
+func unlockedLock(paths Paths, lockPath string) (lock.LockedConfig, bool) {
+	contents, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		return lock.LockedConfig{}, false
+	}
+	locked, err := lock.Read(lockPath)
+	if err != nil {
+		return lock.LockedConfig{}, false
+	}
+	read := lock.Context{
+		ConfigFile:        paths.ConfigFile,
+		ConfigFingerprint: fingerprintWithShell(contents),
+		DataDirectory:     paths.DataDirectory,
+		Profile:           profile,
+		Shell:             locked.Shell,
+	}
+	return locked, lock.VerifyLocked(locked, read)
 }
 
 func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Writer) error {
@@ -514,19 +541,13 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 		if err != nil {
 			return err
 		}
-		inputs, err := loadSourceInputs(paths)
-		if err != nil {
-			_ = guard.Release()
-			return err
-		}
-		locked, readErr := lock.Read(lockPath)
-		if readErr == nil && lock.VerifyLocked(locked, inputs.Context) {
+		if locked, valid := unlockedLock(paths, lockPath); valid {
 			defer func() { _ = guard.Release() }()
 			log.verboseHeader("Unlocked", displayPath(lockPath))
-			if err := lock.Restore(inputs.Config, source.NewInstaller(paths.DataDirectory), locked, concurrency); err != nil {
+			if err := lock.Restore(locked, source.NewInstaller(paths.DataDirectory), concurrency); err != nil {
 				return err
 			}
-			return renderScript(output, locked, inputs, diagnostics)
+			return renderScript(output, locked, diagnostics)
 		}
 		if err := guard.Release(); err != nil {
 			return err
@@ -552,7 +573,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	return renderScript(output, locked, inputs, diagnostics)
+	return renderScript(output, locked, diagnostics)
 }
 
 func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) error {
@@ -567,7 +588,7 @@ func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) 
 	if err != nil {
 		return err
 	}
-	return renderScript(output, locked, inputs, diagnostics)
+	return renderScript(output, locked, diagnostics)
 }
 
 // interactiveSelect is the picker behind remove --interactive; a variable so tests can script it.
@@ -868,7 +889,7 @@ func loadConfigWithFingerprint(path string) (config.Config, string, error) {
 	if err != nil {
 		return config.Config{}, "", err
 	}
-	return cfg, lock.Fingerprint(contents), nil
+	return cfg, fingerprintWithShell(contents), nil
 }
 
 // configShell returns the shell named by SHELF_SHELL, erroring on an unsupported value.

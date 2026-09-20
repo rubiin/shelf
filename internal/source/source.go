@@ -62,6 +62,9 @@ type installer struct{ dataDir string }
 
 func NewInstaller(dataDir string) Installer { return installer{dataDir: dataDir} }
 
+// CloneURL resolves the URL a git source clones from, so a lock can record it.
+func CloneURL(request Request) string { return gitURL(request) }
+
 // installLocks serializes installs into one directory, which two plugins sharing a source can target.
 var installLocks sync.Map
 

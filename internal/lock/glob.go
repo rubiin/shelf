@@ -47,8 +47,7 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
-	var files []string
+	var matched []string
 	for _, pattern := range patterns {
 		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
 		// Clean like the glob walk did, so patterns such as `./*.zsh` still match relative paths.
@@ -57,31 +56,34 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 		if !doublestar.ValidatePattern(rendered) {
 			return nil, fmt.Errorf("invalid pattern: %s", pattern)
 		}
-		var matches []string
+		selected := 0
 		for _, candidate := range candidates {
-			matched, err := doublestar.Match(rendered, candidate)
+			ok, err := doublestar.Match(rendered, candidate)
 			if err != nil {
 				return nil, err
 			}
-			if matched {
-				matches = append(matches, candidate)
+			if ok {
+				matched = append(matched, candidate)
+				selected++
 			}
 		}
-		if len(matches) == 0 {
-			continue
-		}
-		sort.Strings(matches)
-		for _, match := range matches {
-			match = filepath.Join(directory, match)
-			if seen[match] {
-				continue
-			}
-			seen[match] = true
-			files = append(files, match)
-		}
-		if firstMatch {
+		if firstMatch && selected > 0 {
 			break
 		}
+	}
+	// Every pattern is walked together, so the selection is ordered by file name.
+	sort.SliceStable(matched, func(left, right int) bool {
+		return filepath.Base(matched[left]) < filepath.Base(matched[right])
+	})
+	seen := map[string]bool{}
+	var files []string
+	for _, match := range matched {
+		match = filepath.Join(directory, match)
+		if seen[match] {
+			continue
+		}
+		seen[match] = true
+		files = append(files, match)
 	}
 	return files, nil
 }
