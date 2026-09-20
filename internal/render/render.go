@@ -112,55 +112,114 @@ func Template(name, text string, data PluginData) (string, error) {
 	return expandTemplateExpressions(result, data)
 }
 
+const loopCloseMarker = "{% endfor %}"
+
 func expandTemplateLoops(text string, data PluginData) (string, error) {
+	var output strings.Builder
+	last := 0
 	for {
-		start := strings.Index(text, "{%")
+		start := strings.Index(text[last:], "{%")
 		if start == -1 {
-			return text, nil
+			break
 		}
+		start += last
 		end := strings.Index(text[start+2:], "%}")
 		if end == -1 {
-			return text, nil
+			break
 		}
 		tag := strings.TrimSpace(text[start+2 : start+2+end])
 		if !strings.HasPrefix(tag, "for ") {
-			return text, nil
+			break
 		}
 		parts := strings.Fields(strings.TrimSpace(strings.TrimPrefix(tag, "for ")))
 		if len(parts) != 3 || parts[1] != "in" {
 			return "", fmt.Errorf("invalid loop tag: %s", tag)
 		}
-		varName := parts[0]
-		iterName := parts[2]
 		loopStart := start + 2 + end + 2
-		closeMarker := "{% endfor %}"
-		closeIdx := strings.Index(text[loopStart:], closeMarker)
+		closeIdx := strings.Index(text[loopStart:], loopCloseMarker)
 		if closeIdx == -1 {
 			return "", fmt.Errorf("unclosed loop in template: %q", text)
 		}
-		body := text[loopStart : loopStart+closeIdx]
-		items, err := resolveTemplateIterable(iterName, data)
+		items, err := resolveTemplateIterable(parts[2], data)
 		if err != nil {
 			return "", err
 		}
-		var rendered strings.Builder
+		body := compileTemplateBody(text[loopStart : loopStart+closeIdx])
+		output.WriteString(text[last:start])
 		for _, item := range items {
 			local := data
-			if varName == "file" {
+			if parts[0] == "file" {
 				local.File = item
 			}
-			expanded, err := expandTemplateLoops(body, local)
+			rendered, err := body.render(local)
 			if err != nil {
 				return "", err
 			}
-			resolved, err := expandTemplateExpressions(expanded, local)
-			if err != nil {
-				return "", err
-			}
-			rendered.WriteString(resolved)
+			output.WriteString(rendered)
 		}
-		text = text[:start] + rendered.String() + text[loopStart+closeIdx+len(closeMarker):]
+		last = loopStart + closeIdx + len(loopCloseMarker)
 	}
+	output.WriteString(text[last:])
+	return output.String(), nil
+}
+
+// templateSegment is one piece of a compiled loop body: literal text or a single expression.
+type templateSegment struct {
+	literal string
+	expr    string
+}
+
+// templateBody is a loop body compiled once; a body with another {% loop %} expands per item.
+type templateBody struct {
+	raw      string
+	segments []templateSegment
+	nested   bool
+	plain    bool
+}
+
+func compileTemplateBody(body string) templateBody {
+	if strings.Contains(body, "{%") {
+		return templateBody{raw: body, nested: true}
+	}
+	matches := expressionPattern.FindAllStringSubmatchIndex(body, -1)
+	if len(matches) == 0 {
+		return templateBody{raw: body, plain: true}
+	}
+	segments := make([]templateSegment, 0, len(matches)*2+1)
+	last := 0
+	for _, match := range matches {
+		segments = append(segments, templateSegment{literal: body[last:match[0]]})
+		segments = append(segments, templateSegment{expr: body[match[2]:match[3]]})
+		last = match[1]
+	}
+	segments = append(segments, templateSegment{literal: body[last:]})
+	return templateBody{segments: segments}
+}
+
+func (body templateBody) render(data PluginData) (string, error) {
+	if body.nested {
+		expanded, err := expandTemplateLoops(body.raw, data)
+		if err != nil {
+			return "", err
+		}
+		return expandTemplateExpressions(expanded, data)
+	}
+	if body.plain {
+		return expandPlaceholders(body.raw, data), nil
+	}
+	var rendered strings.Builder
+	for _, segment := range body.segments {
+		if segment.expr == "" {
+			rendered.WriteString(segment.literal)
+			continue
+		}
+		value, err := resolveTemplateValue(segment.expr, data)
+		if err != nil {
+			return "", err
+		}
+		rendered.WriteString(value)
+	}
+	return rendered.String(), nil
 }
 
 func resolveTemplateIterable(name string, data PluginData) ([]string, error) {
@@ -179,14 +238,11 @@ func resolveTemplateIterable(name string, data PluginData) ([]string, error) {
 	}
 }
 
-var (
-	expressionPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
-	blankLinesPattern = regexp.MustCompile(`\n{3,}`)
-)
+var expressionPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
 func expandTemplateExpressions(text string, data PluginData) (string, error) {
 	if !strings.Contains(text, "{{") {
-		return placeholderReplacer(data).Replace(text), nil
+		return expandPlaceholders(text, data), nil
 	}
 
 	var result strings.Builder
@@ -204,13 +260,43 @@ func expandTemplateExpressions(text string, data PluginData) (string, error) {
 	return result.String(), nil
 }
 
-func placeholderReplacer(data PluginData) *strings.Replacer {
-	return strings.NewReplacer(
-		"{name}", data.Name,
-		"{dir}", data.Directory,
-		"{file}", data.File,
-		"{nl}", "\n",
-	)
+// expandPlaceholders substitutes {name}, {dir}, {file}, and {nl} without building a Replacer.
+func expandPlaceholders(text string, data PluginData) string {
+	if !strings.ContainsRune(text, '{') {
+		return text
+	}
+	var output strings.Builder
+	output.Grow(len(text) + 32)
+	for index := 0; index < len(text); {
+		if text[index] != '{' {
+			next := strings.IndexByte(text[index:], '{')
+			if next == -1 {
+				output.WriteString(text[index:])
+				break
+			}
+			output.WriteString(text[index : index+next])
+			index += next
+			continue
+		}
+		switch {
+		case strings.HasPrefix(text[index:], "{name}"):
+			output.WriteString(data.Name)
+			index += len("{name}")
+		case strings.HasPrefix(text[index:], "{dir}"):
+			output.WriteString(data.Directory)
+			index += len("{dir}")
+		case strings.HasPrefix(text[index:], "{file}"):
+			output.WriteString(data.File)
+			index += len("{file}")
+		case strings.HasPrefix(text[index:], "{nl}"):
+			output.WriteByte('\n')
+			index += len("{nl}")
+		default:
+			output.WriteByte(text[index])
+			index++
+		}
+	}
+	return output.String()
 }
 
 func resolveTemplateValue(expr string, data PluginData) (string, error) {
@@ -256,12 +342,25 @@ func normalizeRenderedOutput(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.TrimLeft(text, "\n")
 	text = strings.TrimRight(text, "\n")
-	return blankLinesPattern.ReplaceAllString(text, "\n\n")
+	if !strings.Contains(text, "\n\n\n") {
+		return text
+	}
+	var output strings.Builder
+	output.Grow(len(text))
+	newlines := 0
+	for index := 0; index < len(text); index++ {
+		if text[index] == '\n' {
+			newlines++
+			if newlines > 2 {
+				continue
+			}
+		} else {
+			newlines = 0
+		}
+		output.WriteByte(text[index])
+	}
+	return output.String()
 }
 
-func defaultTemplate(shell string) string {
-	if shell == "zsh" {
-		return "source {file}"
-	}
-	return "source {file}"
-}
+// defaultTemplate returns the built-in apply template; bash and zsh source files the same way.
+func defaultTemplate(string) string { return "source {file}" }

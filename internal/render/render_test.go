@@ -99,6 +99,77 @@ func TestScriptRejectsUnknownApplyTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplateExpandsBarePlaceholders(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "all placeholders", text: "{name}|{dir}|{file}|{nl}", want: "demo|/tmp/demo|/tmp/demo/demo.zsh|\n"},
+		{name: "repeated", text: "{file} {file}", want: "/tmp/demo/demo.zsh /tmp/demo/demo.zsh"},
+		{name: "unknown brace", text: "{unknown}", want: "{unknown}"},
+		{name: "unclosed brace", text: "{name", want: "{name"},
+		{name: "trailing brace", text: "name}", want: "name}"},
+		{name: "empty braces", text: "{}", want: "{}"},
+	}
+	data := PluginData{Name: "demo", Directory: "/tmp/demo", File: "/tmp/demo/demo.zsh"}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Template(test.name, test.text, data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result != test.want {
+				t.Fatalf("result = %q, want %q", result, test.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeRenderedOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "windows newlines", text: "a\r\nb", want: "a\nb"},
+		{name: "leading newlines", text: "\n\n\na", want: "a"},
+		{name: "trailing newlines", text: "a\n\n", want: "a"},
+		{name: "blank line run collapses", text: "a\n\n\n\n\nb", want: "a\n\nb"},
+		{name: "two newlines kept", text: "a\n\nb", want: "a\n\nb"},
+		{name: "runs split by text", text: "a\n\n\nb\n\n\n\nc", want: "a\n\nb\n\nc"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizeRenderedOutput(test.text); got != test.want {
+				t.Fatalf("normalizeRenderedOutput(%q) = %q, want %q", test.text, got, test.want)
+			}
+		})
+	}
+}
+
+func TestTemplateRejectsNestedLoops(t *testing.T) {
+	// Loops do not nest: the outer body ends at the first {% endfor %}, so inner loops fail to close.
+	_, err := Template("nested", "{% for file in files %}{% for hook in hooks %}{{ hook }}{% endfor %}{% endfor %}", PluginData{
+		Files: []string{"/tmp/one.zsh"},
+		Hooks: map[string]string{"pre": "echo pre"},
+	})
+	if err == nil {
+		t.Fatal("nested loops were accepted")
+	}
+}
+
+func TestTemplateLeavesLiteralTextUntouched(t *testing.T) {
+	// Bare placeholders are only substituted when the text carries no {{ expressions }}.
+	result, err := Template("mixed", "source {file} {{ name }}", PluginData{Name: "demo", File: "/tmp/demo.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "source {file} demo" {
+		t.Fatalf("result = %q", result)
+	}
+}
+
 func TestScriptExpandsHookTemplateLoops(t *testing.T) {
 	template := "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
