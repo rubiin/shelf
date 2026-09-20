@@ -186,9 +186,9 @@ func lockConfig(mode lock.Mode, diagnostics io.Writer) error {
 		return err
 	}
 	colors := newColors(color, diagnostics)
-	fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
+	_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
 	for _, plugin := range cfg.Plugins {
-		fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(plugin))
+		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(plugin))
 	}
 	shell := cfg.Shell
 	if shell == "" {
@@ -202,7 +202,7 @@ func lockConfig(mode lock.Mode, diagnostics io.Writer) error {
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Locked"), displayPath(lockPath))
+	_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Locked"), displayPath(lockPath))
 	return nil
 }
 

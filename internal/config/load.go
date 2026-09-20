@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net/url"
-	"os"
 
 	"github.com/BurntSushi/toml"
 )
@@ -42,13 +41,6 @@ func Validate(cfg Config) error {
 				return fmt.Errorf("plugin %q has invalid remote URL", name)
 			}
 		}
-	}
-	return nil
-}
-
-func fileExists(path string) error {
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("config file: %w", err)
 	}
 	return nil
 }
