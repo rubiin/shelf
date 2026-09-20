@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -611,5 +613,80 @@ func TestLockReportsProgressOnStderr(t *testing.T) {
 	}()
 	if stdout.Len() != 0 {
 		t.Fatalf("lock stdout = %q", stdout.String())
+	}
+}
+
+// checkedSources returns the plugin sources the lock diagnostics printed, in order.
+func checkedSources(stderr string) []string {
+	var sources []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if index := strings.Index(line, "Checked "); index >= 0 {
+			sources = append(sources, line[index+len("Checked "):])
+		}
+	}
+	return sources
+}
+
+func TestLockDiagnosticsFollowConfigOrder(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Local sources render their own path, so declaration order is observable; it is not alphabetical.
+	names := []string{"zeta", "alpha", "mu", "beta", "eta"}
+	var declared strings.Builder
+	declared.WriteString("shell = \"zsh\"\n")
+	want := make([]string, 0, len(names))
+	for _, name := range names {
+		source := filepath.Join(directory, "sources", name)
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		declared.WriteString("\n[plugins." + name + "]\nlocal = " + strconv.Quote(source) + "\n")
+		want = append(want, source)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte(declared.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	// Run repeatedly: map iteration order varies per pass, so nondeterminism fails a pass.
+	for pass := range 4 {
+		var stderr bytes.Buffer
+		if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err != nil {
+			t.Fatal(err)
+		}
+		if got := checkedSources(stderr.String()); !slices.Equal(got, want) {
+			t.Fatalf("pass %d checked sources = %q, want %q", pass, got, want)
+		}
+	}
+}
+
+func TestLockDiagnosticsIncludeDottedKeyPlugins(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Dotted keys never reach PluginOrder, so the fallback must still list them.
+	configFile := filepath.Join(configDir, "config.toml")
+	contents := "shell = \"zsh\"\n\nplugins.orphan.inline = \"echo orphan\"\n"
+	if err := os.WriteFile(configFile, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkedSources(stderr.String()); !slices.Equal(got, []string{"inline"}) {
+		t.Fatalf("checked sources = %q, want [inline]", got)
 	}
 }

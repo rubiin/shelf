@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"golang.org/x/term"
 
@@ -245,7 +246,10 @@ func NewRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			shell := configShell()
+			shell, err := configShell()
+			if err != nil {
+				return err
+			}
 			if initShell != "" {
 				shell = config.Shell(initShell)
 			}
@@ -270,7 +274,7 @@ func lockConfig(mode lock.Mode, concurrency int, diagnostics io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(paths.ConfigFile)
+	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
@@ -280,15 +284,15 @@ func lockConfig(mode lock.Mode, concurrency int, diagnostics io.Writer) error {
 	colors := newColors(color, diagnostics)
 	if !quiet {
 		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
-		for _, plugin := range cfg.Plugins {
-			_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(plugin))
+		for _, name := range lock.PluginNames(cfg) {
+			_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(cfg.Plugins[name]))
 		}
 	}
-	shell := cfg.Shell
-	if shell == "" {
-		shell = configShell()
+	shell, err := resolveShell(cfg)
+	if err != nil {
+		return err
 	}
-	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
+	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
 	if err != nil {
 		return err
 	}
@@ -336,12 +340,63 @@ func editConfig() error {
 	if editor == "" {
 		return fmt.Errorf("no editor configured")
 	}
-	parts := strings.Fields(editor)
-	command := exec.Command(parts[0], append(parts[1:], paths.ConfigFile)...)
+	arguments, err := splitEditorCommand(editor)
+	if err != nil {
+		return err
+	}
+	if len(arguments) == 0 {
+		return fmt.Errorf("no editor configured")
+	}
+	command := exec.Command(arguments[0], append(arguments[1:], paths.ConfigFile)...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	return command.Run()
+}
+
+// splitEditorCommand splits an editor command line with shell-word rules, honoring quotes and escapes.
+func splitEditorCommand(value string) ([]string, error) {
+	var (
+		arguments []string
+		current   strings.Builder
+		quote     rune
+		escaped   bool
+		started   bool
+	)
+	for _, character := range value {
+		switch {
+		case escaped:
+			current.WriteRune(character)
+			escaped, started = false, true
+		case character == '\\' && quote != '\'':
+			escaped = true
+		case quote != 0:
+			if character == quote {
+				quote = 0
+			} else {
+				current.WriteRune(character)
+			}
+			started = true
+		case character == '\'' || character == '"':
+			quote, started = character, true
+		case unicode.IsSpace(character):
+			if started {
+				arguments = append(arguments, current.String())
+				current.Reset()
+				started = false
+			}
+		default:
+			current.WriteRune(character)
+			started = true
+		}
+	}
+	if escaped || quote != 0 {
+		return nil, fmt.Errorf("unbalanced quotes in editor command: %q", value)
+	}
+	if started {
+		arguments = append(arguments, current.String())
+	}
+	return arguments, nil
 }
 
 func sourceConfig(output io.Writer, force bool, mode lock.Mode, concurrency int) error {
@@ -349,28 +404,24 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode, concurrency int)
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(paths.ConfigFile)
+	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	shell := cfg.Shell
-	if shell == "" {
-		shell = configShell()
+	shell, err := resolveShell(cfg)
+	if err != nil {
+		return err
 	}
-	lockContext := lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}
+	lockContext := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}
 	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
 	var locked lock.LockedConfig
 	if !force {
 		locked, err = lock.Read(lockPath)
-		if err == nil {
-			var valid bool
-			valid, err = lock.Verify(lockPath, lockContext)
-			if err == nil && !valid {
-				err = os.ErrNotExist
-			}
+		if err == nil && !lock.VerifyLocked(locked, lockContext) {
+			err = os.ErrNotExist
 		}
 	}
 	if force || err != nil {
@@ -381,7 +432,7 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode, concurrency int)
 		if err := lock.Write(lockPath, locked); err != nil {
 			return err
 		}
-	} else if err := lock.Restore(cfg, source.NewInstaller(paths.DataDirectory), locked); err != nil {
+	} else if err := lock.Restore(cfg, source.NewInstaller(paths.DataDirectory), locked, concurrency); err != nil {
 		return err
 	}
 	script, err := render.Script(locked, string(shell), cfg.Templates)
@@ -397,18 +448,18 @@ func updateSources(output io.Writer, concurrency int) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(paths.ConfigFile)
+	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	shell := cfg.Shell
-	if shell == "" {
-		shell = configShell()
+	shell, err := resolveShell(cfg)
+	if err != nil {
+		return err
 	}
-	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
+	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
 	if err != nil {
 		return err
 	}
@@ -420,8 +471,7 @@ func updateSources(output io.Writer, concurrency int) error {
 	return err
 }
 
-// interactiveSelect is the picker behind remove --interactive. It is a
-// package-level variable so tests can script the selection.
+// interactiveSelect is the picker behind remove --interactive; a variable so tests can script it.
 var interactiveSelect = func(options []string, out io.Writer) ([]string, error) {
 	return tui.Select(options, tui.IO{In: os.Stdin, Out: out, MakeRaw: term.MakeRaw, Restore: term.Restore, Color: colorEnabled(color, true)})
 }
@@ -503,19 +553,19 @@ func pluginStatus(output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(paths.ConfigFile)
+	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	shell := cfg.Shell
-	if shell == "" {
-		shell = configShell()
+	shell, err := resolveShell(cfg)
+	if err != nil {
+		return err
 	}
 	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
-	valid, err := lock.Verify(lockPath, lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
+	valid, err := lock.Verify(lockPath, lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
 	if err != nil {
 		return err
 	}
@@ -555,7 +605,7 @@ func doctor(output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(paths.ConfigFile)
+	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
@@ -573,11 +623,11 @@ func doctor(output io.Writer) error {
 			return err
 		}
 	}
-	shell := cfg.Shell
-	if shell == "" {
-		shell = configShell()
+	shell, err := resolveShell(cfg)
+	if err != nil {
+		return err
 	}
-	valid, err := lock.Verify(filepath.Join(paths.ConfigDirectory, "plugins.lock"), lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
+	valid, err := lock.Verify(filepath.Join(paths.ConfigDirectory, "plugins.lock"), lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
 	if err != nil {
 		return err
 	}
@@ -631,14 +681,35 @@ func cleanPlugins(output io.Writer) error {
 	return nil
 }
 
-func configShell() config.Shell {
-	if value := os.Getenv("SHELF_SHELL"); value == "bash" {
-		return config.Bash
+// loadConfigWithFingerprint reads config.toml once and returns it with its lock fingerprint.
+func loadConfigWithFingerprint(path string) (config.Config, string, error) {
+	cfg, contents, err := config.LoadWithContents(path)
+	if err != nil {
+		return config.Config{}, "", err
 	}
-	if value := os.Getenv("SHELF_SHELL"); value == "zsh" {
-		return config.Zsh
+	return cfg, lock.Fingerprint(contents), nil
+}
+
+// configShell returns the shell named by SHELF_SHELL, erroring on an unsupported value.
+func configShell() (config.Shell, error) {
+	switch value := os.Getenv("SHELF_SHELL"); value {
+	case "":
+		return config.Zsh, nil
+	case string(config.Bash):
+		return config.Bash, nil
+	case string(config.Zsh):
+		return config.Zsh, nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q in SHELF_SHELL", value)
 	}
-	return config.Zsh
+}
+
+// resolveShell returns the configured shell when the config sets one, otherwise SHELF_SHELL.
+func resolveShell(cfg config.Config) (config.Shell, error) {
+	if cfg.Shell != "" {
+		return cfg.Shell, nil
+	}
+	return configShell()
 }
 
 func Execute(args []string, stdout, stderr io.Writer) error {
@@ -649,20 +720,18 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 	return command.Execute()
 }
 
+// RuntimeContext reports settings to non-Cobra callers, delegating paths to ResolvePaths.
 func RuntimeContext() Context {
-	configDirectory := configDir
-	if configDirectory == "" {
-		configDirectory = filepath.Join(envString("XDG_CONFIG_HOME", filepath.Join(homeDir(), ".config")), "shelf")
+	context := Context{Profile: profile, Quiet: quiet, NonInteractive: nonInteractive, Verbose: verbose, Color: color}
+	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
+	if err != nil {
+		// An unresolvable home directory leaves the path fields empty rather than guessing.
+		return context
 	}
-	dataDirectory := dataDir
-	if dataDirectory == "" {
-		dataDirectory = filepath.Join(envString("XDG_DATA_HOME", filepath.Join(homeDir(), ".local", "share")), "shelf")
-	}
-	resolvedConfigFile := configFile
-	if resolvedConfigFile == "" {
-		resolvedConfigFile = filepath.Join(configDirectory, "config.toml")
-	}
-	return Context{ConfigFile: resolvedConfigFile, ConfigDirectory: configDirectory, DataDirectory: dataDirectory, Profile: profile, Quiet: quiet, NonInteractive: nonInteractive, Verbose: verbose, Color: color}
+	context.ConfigFile = paths.ConfigFile
+	context.ConfigDirectory = paths.ConfigDirectory
+	context.DataDirectory = paths.DataDirectory
+	return context
 }
 
 func envString(name, fallback string) string {

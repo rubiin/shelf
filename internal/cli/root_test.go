@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"shelf/internal/config"
@@ -91,14 +93,134 @@ func TestShelfPrefixesDirectoryFlagsAndEnvironment(t *testing.T) {
 	}
 }
 
-func TestConfigShellDefaultsToZsh(t *testing.T) {
+func TestConfigShellSelection(t *testing.T) {
 	t.Setenv("SHELF_SHELL", "")
-	if got := configShell(); got != config.Zsh {
-		t.Fatalf("default shell = %q, want %q", got, config.Zsh)
+	shell, err := configShell()
+	if err != nil || shell != config.Zsh {
+		t.Fatalf("default shell = %q, err = %v, want %q", shell, err, config.Zsh)
 	}
 
 	t.Setenv("SHELF_SHELL", "bash")
-	if got := configShell(); got != config.Bash {
-		t.Fatalf("explicit shell = %q, want %q", got, config.Bash)
+	shell, err = configShell()
+	if err != nil || shell != config.Bash {
+		t.Fatalf("explicit shell = %q, err = %v, want %q", shell, err, config.Bash)
+	}
+
+	t.Setenv("SHELF_SHELL", "fish")
+	if _, err := configShell(); err == nil || !strings.Contains(err.Error(), "SHELF_SHELL") {
+		t.Fatalf("unknown shell err = %v, want an error naming SHELF_SHELL", err)
+	}
+}
+
+func TestLockRejectsUnknownShellEnvironment(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("[plugins.test]\ninline = \"echo hi\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", directory)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_SHELL", "fish")
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "SHELF_SHELL") {
+		t.Fatalf("lock err = %v, want an error naming SHELF_SHELL", err)
+	}
+}
+
+func TestAddRejectsTOMLHostilePluginNames(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", directory)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	for _, name := range []string{"bad name", "my.plugin", `quo"te`} {
+		if err := Execute([]string{"add", name, "--inline", "echo hi"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+			t.Errorf("add accepted plugin name %q", name)
+		}
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "plugins") {
+		t.Fatalf("rejected names still wrote sections: %s", contents)
+	}
+}
+
+func TestSplitEditorCommand(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{name: "plain", value: "vim", want: []string{"vim"}},
+		{name: "flags", value: "nvim --wait", want: []string{"nvim", "--wait"}},
+		{name: "extra spaces", value: "  vim   -f  ", want: []string{"vim", "-f"}},
+		{name: "quoted path with spaces", value: `'/opt/my editor/nvim' --wait`, want: []string{"/opt/my editor/nvim", "--wait"}},
+		{name: "double quoted path", value: `"/opt/my editor/nvim"`, want: []string{"/opt/my editor/nvim"}},
+		{name: "quoted argument", value: `vim -c "set nobackup"`, want: []string{"vim", "-c", "set nobackup"}},
+		{name: "escaped spaces", value: `/opt/my\ editor/vim -f`, want: []string{"/opt/my editor/vim", "-f"}},
+		{name: "empty", value: "", want: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := splitEditorCommand(test.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("arguments = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSplitEditorCommandRejectsUnbalancedQuotes(t *testing.T) {
+	if _, err := splitEditorCommand(`'/opt/my editor/nvim`); err == nil {
+		t.Fatal("unbalanced quote was accepted")
+	}
+}
+
+func TestEditRunsEditorFromQuotedPath(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	editorDirectory := filepath.Join(directory, "my editor")
+	if err := os.MkdirAll(editorDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	editor := filepath.Join(editorDirectory, "editor.sh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SHELF_EDITOR_CAPTURE\"\n"
+	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	capture := filepath.Join(directory, "editor-args")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_EDITOR", "'"+editor+"' --wait")
+	t.Setenv("SHELF_EDITOR_CAPTURE", capture)
+
+	if err := Execute([]string{"edit"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--wait\n" + configFile + "\n"
+	if string(contents) != want {
+		t.Fatalf("editor arguments = %q, want %q", contents, want)
 	}
 }

@@ -13,8 +13,7 @@ const (
 	statusWidth     = 10
 )
 
-// colorEnabled reports whether ANSI colors should be emitted for the
-// requested mode: always, never, or auto.
+// colorEnabled reports whether ANSI colors should be emitted for the requested mode.
 func colorEnabled(mode string, tty bool) bool {
 	switch mode {
 	case "always":
@@ -45,8 +44,7 @@ func isTerminal(w io.Writer) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// colors formats diagnostics prefixes with or without ANSI colors. Headers
-// are bold magenta and statuses are bold cyan, matching sheldon.
+// colors formats diagnosis prefixes: bold magenta headers and bold cyan statuses.
 type colors struct{ enabled bool }
 
 func newColors(mode string, diagnostics io.Writer) colors {

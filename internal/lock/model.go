@@ -1,10 +1,12 @@
 package lock
 
 type Context struct {
-	ConfigFile    string
-	DataDirectory string
-	Profile       string
-	Shell         string
+	ConfigFile string
+	// ConfigFingerprint lets callers that already read the config skip a second read.
+	ConfigFingerprint string
+	DataDirectory     string
+	Profile           string
+	Shell             string
 }
 
 type Mode int

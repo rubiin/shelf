@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,21 +17,26 @@ import (
 
 const DefaultConcurrency = 8
 
+// fingerprint returns the supplied config fingerprint, or computes it from ConfigFile.
+func (ctx Context) fingerprint() string {
+	if ctx.ConfigFingerprint != "" {
+		return ctx.ConfigFingerprint
+	}
+	return fingerprint(ctx.ConfigFile)
+}
+
 func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode) (LockedConfig, error) {
 	return BuildWithConcurrency(ctx, cfg, installer, mode, DefaultConcurrency)
 }
 
 func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Installer, mode Mode, concurrency int) (LockedConfig, error) {
-	if concurrency < 1 {
-		return LockedConfig{}, fmt.Errorf("concurrency must be at least 1")
-	}
-	locked := LockedConfig{ConfigFingerprint: fingerprint(ctx.ConfigFile), Profile: ctx.Profile, Shell: ctx.Shell}
+	locked := LockedConfig{ConfigFingerprint: ctx.fingerprint(), Profile: ctx.Profile, Shell: ctx.Shell}
 	type task struct {
 		name   string
 		plugin config.RawPlugin
 	}
 	var tasks []task
-	for _, name := range pluginNames(cfg) {
+	for _, name := range PluginNames(cfg) {
 		plugin := cfg.Plugins[name]
 		if !active(plugin.Profiles, ctx.Profile) {
 			continue
@@ -40,14 +44,39 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 		tasks = append(tasks, task{name: name, plugin: plugin})
 	}
 	plugins := make([]LockedPlugin, len(tasks))
+	err := runConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
+		plugin, err := buildPlugin(installContext, ctx, cfg, installer, mode, tasks[index].name, tasks[index].plugin)
+		if err != nil {
+			return err
+		}
+		plugins[index] = plugin
+		return nil
+	})
+	if err != nil {
+		return LockedConfig{}, err
+	}
+	locked.Plugins = plugins
+	return locked, nil
+}
+
+// runConcurrently runs work per index with at most concurrency workers, cancelling the rest on failure.
+func runConcurrently(count, concurrency int, work func(ctx context.Context, index int) error) error {
+	if concurrency < 1 {
+		return fmt.Errorf("concurrency must be at least 1")
+	}
+	if count == 0 {
+		return nil
+	}
+	if count == 1 {
+		return work(context.Background(), 0)
+	}
 	installContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	jobs := make(chan int)
-	workers := min(concurrency, len(tasks))
+	jobs := make(chan int, min(concurrency, count))
 	var waitGroup sync.WaitGroup
 	var once sync.Once
-	var buildErr error
-	for range workers {
+	var firstErr error
+	for range min(concurrency, count) {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
@@ -59,21 +88,19 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 					if !open {
 						return
 					}
-					plugin, err := buildPlugin(installContext, ctx, cfg, installer, mode, tasks[index].name, tasks[index].plugin)
-					if err != nil {
+					if err := work(installContext, index); err != nil {
 						once.Do(func() {
-							buildErr = err
+							firstErr = err
 							cancel()
 						})
 						return
 					}
-					plugins[index] = plugin
 				}
 			}
 		}()
 	}
 dispatch:
-	for index := range tasks {
+	for index := range count {
 		select {
 		case <-installContext.Done():
 			break dispatch
@@ -82,11 +109,7 @@ dispatch:
 	}
 	close(jobs)
 	waitGroup.Wait()
-	if buildErr != nil {
-		return LockedConfig{}, buildErr
-	}
-	locked.Plugins = plugins
-	return locked, nil
+	return firstErr
 }
 
 func buildPlugin(installContext context.Context, ctx Context, cfg config.Config, installer source.Installer, mode Mode, name string, plugin config.RawPlugin) (LockedPlugin, error) {
@@ -132,7 +155,9 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	return LockedPlugin{Name: name, Source: pluginSource(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks}, nil
 }
 
-func Restore(cfg config.Config, installer source.Installer, locked LockedConfig) error {
+// Restore reinstalls the pinned revisions through the same worker pool as locking.
+func Restore(cfg config.Config, installer source.Installer, locked LockedConfig, concurrency int) error {
+	var tasks []LockedPlugin
 	for _, plugin := range locked.Plugins {
 		if plugin.Rev == "" {
 			continue
@@ -141,14 +166,19 @@ func Restore(cfg config.Config, installer source.Installer, locked LockedConfig)
 		if !exists || !isGit(configured) {
 			continue
 		}
-		if _, err := installer.Install(context.Background(), source.Request{
+		tasks = append(tasks, plugin)
+	}
+	return runConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
+		plugin := tasks[index]
+		configured := cfg.Plugins[plugin.Name]
+		if _, err := installer.Install(installContext, source.Request{
 			Name: plugin.Name, Git: configured.Git, GitHub: configured.GitHub, Gist: configured.Gist, Protocol: configured.Protocol,
 			Ref: plugin.Rev, Dir: configured.Dir,
 		}); err != nil {
 			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func pluginSource(plugin config.RawPlugin) string {
@@ -168,7 +198,8 @@ func isGit(plugin config.RawPlugin) bool {
 	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != ""
 }
 
-func pluginNames(cfg config.Config) []string {
+// PluginNames returns plugin names in declaration order, then remaining names sorted.
+func PluginNames(cfg config.Config) []string {
 	seen := make(map[string]bool, len(cfg.Plugins))
 	names := make([]string, 0, len(cfg.Plugins))
 	for _, name := range cfg.PluginOrder {
@@ -199,16 +230,26 @@ func active(profiles []string, profile string) bool {
 	return false
 }
 
+// Write encodes through a temp file and an atomic rename, so a crash cannot truncate the lock.
 func Write(path string, locked LockedConfig) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err
 	}
-	file, err := os.Create(path)
+	temporary, err := os.CreateTemp(directory, ".plugins-*.lock")
 	if err != nil {
 		return err
 	}
-	encodeErr := toml.NewEncoder(file).Encode(locked)
-	return errors.Join(encodeErr, file.Close())
+	temporaryName := temporary.Name()
+	defer func() { _ = os.Remove(temporaryName) }()
+	if err := toml.NewEncoder(temporary).Encode(locked); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, path)
 }
 
 func Read(path string) (LockedConfig, error) {
@@ -224,17 +265,28 @@ func Verify(path string, ctx Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if locked.Profile != ctx.Profile || locked.Shell != ctx.Shell || locked.ConfigFingerprint != fingerprint(ctx.ConfigFile) {
-		return false, nil
+	return VerifyLocked(locked, ctx), nil
+}
+
+// VerifyLocked checks an already-read lock file against the context, avoiding a second read.
+func VerifyLocked(locked LockedConfig, ctx Context) bool {
+	if locked.Profile != ctx.Profile || locked.Shell != ctx.Shell || locked.ConfigFingerprint != ctx.fingerprint() {
+		return false
 	}
 	for _, plugin := range locked.Plugins {
 		for _, file := range plugin.Files {
 			if _, err := os.Stat(file); err != nil {
-				return false, nil
+				return false
 			}
 		}
 	}
-	return true, nil
+	return true
+}
+
+// Fingerprint returns the config fingerprint recorded in lock files.
+func Fingerprint(contents []byte) string {
+	hash := sha256.Sum256(contents)
+	return hex.EncodeToString(hash[:])
 }
 
 func fingerprint(path string) string {
@@ -242,6 +294,5 @@ func fingerprint(path string) string {
 	if err != nil {
 		return ""
 	}
-	hash := sha256.Sum256(contents)
-	return hex.EncodeToString(hash[:])
+	return Fingerprint(contents)
 }
