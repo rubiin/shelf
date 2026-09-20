@@ -13,6 +13,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
 
 archives:
   - formats: [tar.gz]

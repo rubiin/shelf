@@ -98,8 +98,9 @@ func NewRoot() *cobra.Command {
 	sourceCommand.MarkFlagsMutuallyExclusive("update", "reinstall")
 	command.AddCommand(sourceCommand)
 	var addGitHub, addGit, addGist, addRemote, addLocal, addInline string
-	var addRev, addBranch, addTag string
-	var addUse []string
+	var addRev, addBranch, addTag, addProtocol, addDir, addFile string
+	var addUse, addApply, addProfiles []string
+	var addHooks map[string]string
 	addCommand := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Add a plugin to the configuration",
@@ -109,7 +110,7 @@ func NewRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Use: addUse})
+			return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Protocol: addProtocol, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks})
 		},
 	}
 	addCommand.Flags().StringVar(&addGitHub, "github", "", "GitHub repository")
@@ -121,7 +122,13 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addRev, "rev", "", "Git revision")
 	addCommand.Flags().StringVar(&addBranch, "branch", "", "Git branch")
 	addCommand.Flags().StringVar(&addTag, "tag", "", "Git tag")
+	addCommand.Flags().StringVar(&addProtocol, "protocol", "", "Git protocol: https, git, or ssh")
+	addCommand.Flags().StringVar(&addDir, "dir", "", "plugin subdirectory")
+	addCommand.Flags().StringVar(&addFile, "file", "", "plugin file")
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
+	addCommand.Flags().StringSliceVar(&addApply, "apply", nil, "template names")
+	addCommand.Flags().StringSliceVar(&addProfiles, "profiles", nil, "plugin profiles")
+	addCommand.Flags().StringToStringVar(&addHooks, "hooks", nil, "plugin hooks")
 	command.AddCommand(addCommand)
 
 	command.AddCommand(&cobra.Command{Use: "edit", Short: "Open the configuration in an editor", RunE: func(_ *cobra.Command, _ []string) error { return editConfig() }})
@@ -186,9 +193,11 @@ func lockConfig(mode lock.Mode, diagnostics io.Writer) error {
 		return err
 	}
 	colors := newColors(color, diagnostics)
-	_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
-	for _, plugin := range cfg.Plugins {
-		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(plugin))
+	if !quiet {
+		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
+		for _, plugin := range cfg.Plugins {
+			_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(plugin))
+		}
 	}
 	shell := cfg.Shell
 	if shell == "" {
@@ -202,7 +211,9 @@ func lockConfig(mode lock.Mode, diagnostics io.Writer) error {
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Locked"), displayPath(lockPath))
+	if !quiet {
+		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Locked"), displayPath(lockPath))
+	}
 	return nil
 }
 
@@ -240,7 +251,8 @@ func editConfig() error {
 	if editor == "" {
 		return fmt.Errorf("no editor configured")
 	}
-	command := exec.Command(editor, paths.ConfigFile)
+	parts := strings.Fields(editor)
+	command := exec.Command(parts[0], append(parts[1:], paths.ConfigFile)...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
@@ -294,10 +306,13 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode) error {
 }
 
 func configShell() config.Shell {
+	if value := os.Getenv("SHELF_SHELL"); value == "bash" {
+		return config.Bash
+	}
 	if value := os.Getenv("SHELF_SHELL"); value == "zsh" {
 		return config.Zsh
 	}
-	return config.Bash
+	return config.Zsh
 }
 
 func Execute(args []string, stdout, stderr io.Writer) error {

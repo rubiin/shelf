@@ -23,15 +23,21 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 			continue
 		}
 		installed, err := installer.Install(context.Background(), source.Request{
-			Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Remote: plugin.Remote,
+			Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Protocol: plugin.Protocol, Remote: plugin.Remote,
 			Local: plugin.Local, Inline: plugin.Inline, Ref: plugin.Rev, Branch: plugin.Branch,
-			Tag: plugin.Tag, Dir: plugin.Dir, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
+			Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
 		})
 		if err != nil {
 			return LockedConfig{}, fmt.Errorf("install plugin %q: %w", name, err)
 		}
 		var files []string
-		if installed.File != "" {
+		if plugin.File != "" {
+			file := filepath.Join(installed.Directory, plugin.File)
+			if _, err := os.Stat(file); err != nil {
+				return LockedConfig{}, fmt.Errorf("select plugin %q file %q: %w", name, plugin.File, err)
+			}
+			files = []string{file}
+		} else if installed.File != "" {
 			files = []string{installed.File}
 		} else {
 			patterns := plugin.Use
