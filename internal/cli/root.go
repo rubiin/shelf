@@ -97,6 +97,14 @@ func NewRoot() *cobra.Command {
 	sourceCommand.Flags().BoolVar(&sourceReinstall, "reinstall", false, "reinstall plugin sources")
 	sourceCommand.MarkFlagsMutuallyExclusive("update", "reinstall")
 	command.AddCommand(sourceCommand)
+	command.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List installed plugins",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return listPlugins(cmd.OutOrStdout())
+		},
+	})
 	var addGitHub, addGit, addGist, addRemote, addLocal, addInline string
 	var addRev, addBranch, addTag, addProtocol, addDir, addFile string
 	var addUse, addApply, addProfiles []string
@@ -305,6 +313,23 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode) error {
 	}
 	_, err = io.WriteString(output, script)
 	return err
+}
+
+func listPlugins(output io.Writer) error {
+	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
+	if err != nil {
+		return err
+	}
+	locked, err := lock.Read(filepath.Join(paths.ConfigDirectory, "plugins.lock"))
+	if err != nil {
+		return err
+	}
+	for _, plugin := range locked.Plugins {
+		if _, err := fmt.Fprintln(output, plugin.Name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func configShell() config.Shell {

@@ -25,7 +25,7 @@ func TestRootCommands(t *testing.T) {
 	for _, command := range root.Commands() {
 		commands[command.Name()] = true
 	}
-	for _, name := range []string{"init", "lock", "source", "add", "edit", "remove", "completions", "version"} {
+	for _, name := range []string{"init", "lock", "source", "list", "add", "edit", "remove", "completions", "version"} {
 		if !commands[name] {
 			t.Errorf("root command %q is missing", name)
 		}

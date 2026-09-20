@@ -112,6 +112,7 @@ go vet ./...
 shelf init
 shelf lock [--update | --reinstall]
 shelf source [--relock | --update | --reinstall]
+shelf list
 shelf add NAME ...
 shelf edit
 shelf remove NAME
