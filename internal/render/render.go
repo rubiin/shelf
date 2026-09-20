@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -14,7 +15,7 @@ type PluginData struct {
 	Directory string
 	File      string
 	Files     []string
-	Hooks     []string
+	Hooks     map[string]string
 }
 
 func Script(locked lock.LockedConfig, shell string, custom ...map[string]string) (string, error) {
@@ -35,7 +36,7 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 
 	var output strings.Builder
 	for _, plugin := range locked.Plugins {
-		data := PluginData{Name: plugin.Name, Directory: plugin.Directory, Files: plugin.Files}
+		data := PluginData{Name: plugin.Name, Directory: plugin.Directory, Files: plugin.Files, Hooks: plugin.Hooks}
 		hookNames := make([]string, 0, len(plugin.Hooks))
 		for name := range plugin.Hooks {
 			hookNames = append(hookNames, name)
@@ -47,8 +48,11 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 			if err != nil {
 				return "", err
 			}
+			line = normalizeRenderedOutput(line)
 			output.WriteString(line)
-			output.WriteString("\n")
+			if line != "" && !strings.HasSuffix(line, "\n") {
+				output.WriteString("\n")
+			}
 		}
 
 		apply := plugin.Apply
@@ -78,8 +82,11 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 					if err != nil {
 						return "", err
 					}
+					line = normalizeRenderedOutput(line)
 					output.WriteString(line)
-					output.WriteString("\n")
+					if line != "" && !strings.HasSuffix(line, "\n") {
+						output.WriteString("\n")
+					}
 				}
 				continue
 			}
@@ -87,21 +94,163 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 			if err != nil {
 				return "", err
 			}
+			line = normalizeRenderedOutput(line)
 			output.WriteString(line)
-			output.WriteString("\n")
+			if line != "" && !strings.HasSuffix(line, "\n") {
+				output.WriteString("\n")
+			}
 		}
 	}
 	return output.String(), nil
 }
 
 func Template(name, text string, data PluginData) (string, error) {
-	result := strings.NewReplacer(
-		"{name}", data.Name,
-		"{dir}", data.Directory,
-		"{file}", data.File,
-		"{nl}", "\n",
-	).Replace(text)
-	return result, nil
+	result, err := expandTemplateLoops(text, data)
+	if err != nil {
+		return "", err
+	}
+	return expandTemplateExpressions(result, data)
+}
+
+func expandTemplateLoops(text string, data PluginData) (string, error) {
+	for {
+		start := strings.Index(text, "{%")
+		if start == -1 {
+			return text, nil
+		}
+		end := strings.Index(text[start+2:], "%}")
+		if end == -1 {
+			return text, nil
+		}
+		tag := strings.TrimSpace(text[start+2 : start+2+end])
+		if !strings.HasPrefix(tag, "for ") {
+			return text, nil
+		}
+		parts := strings.Fields(strings.TrimSpace(strings.TrimPrefix(tag, "for ")))
+		if len(parts) != 3 || parts[1] != "in" {
+			return "", fmt.Errorf("invalid loop tag: %s", tag)
+		}
+		varName := parts[0]
+		iterName := parts[2]
+		loopStart := start + 2 + end + 2
+		closeMarker := "{% endfor %}"
+		closeIdx := strings.Index(text[loopStart:], closeMarker)
+		if closeIdx == -1 {
+			return "", fmt.Errorf("unclosed loop in template: %q", text)
+		}
+		body := text[loopStart : loopStart+closeIdx]
+		items, err := resolveTemplateIterable(iterName, data)
+		if err != nil {
+			return "", err
+		}
+		var rendered strings.Builder
+		for _, item := range items {
+			local := data
+			if varName == "file" {
+				local.File = item
+			}
+			expanded, err := expandTemplateLoops(body, local)
+			if err != nil {
+				return "", err
+			}
+			resolved, err := expandTemplateExpressions(expanded, local)
+			if err != nil {
+				return "", err
+			}
+			rendered.WriteString(resolved)
+		}
+		text = text[:start] + rendered.String() + text[loopStart+closeIdx+len(closeMarker):]
+	}
+}
+
+func resolveTemplateIterable(name string, data PluginData) ([]string, error) {
+	switch name {
+	case "files":
+		return data.Files, nil
+	case "hooks":
+		keys := make([]string, 0, len(data.Hooks))
+		for key := range data.Hooks {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		return keys, nil
+	default:
+		return nil, fmt.Errorf("unknown template iterable: %s", name)
+	}
+}
+
+func expandTemplateExpressions(text string, data PluginData) (string, error) {
+	if !strings.Contains(text, "{{") {
+		result := strings.NewReplacer(
+			"{name}", data.Name,
+			"{dir}", data.Directory,
+			"{file}", data.File,
+			"{nl}", "\n",
+		).Replace(text)
+		return result, nil
+	}
+
+	re := regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+	var result strings.Builder
+	last := 0
+	for _, match := range re.FindAllStringSubmatchIndex(text, -1) {
+		result.WriteString(text[last:match[0]])
+		value, err := resolveTemplateValue(text[match[2]:match[3]], data)
+		if err != nil {
+			return "", err
+		}
+		result.WriteString(value)
+		last = match[1]
+	}
+	result.WriteString(text[last:])
+	return result.String(), nil
+}
+
+func resolveTemplateValue(expr string, data PluginData) (string, error) {
+	expr = strings.TrimSpace(expr)
+	filter := ""
+	if parts := strings.SplitN(expr, "|", 2); len(parts) == 2 {
+		expr = strings.TrimSpace(parts[0])
+		filter = strings.TrimSpace(parts[1])
+	}
+	var value string
+	switch expr {
+	case "name":
+		value = data.Name
+	case "dir":
+		value = data.Directory
+	case "file":
+		value = data.File
+	case "hooks?.pre", "hooks.pre":
+		value = data.Hooks["pre"]
+	case "hooks?.post", "hooks.post":
+		value = data.Hooks["post"]
+	case "hooks?.pre | nl", "hooks.pre | nl":
+		value = data.Hooks["pre"]
+		filter = "nl"
+	default:
+		if strings.HasPrefix(expr, "hooks?") {
+			key := strings.TrimPrefix(expr, "hooks?")
+			key = strings.TrimPrefix(key, ".")
+			value = data.Hooks[key]
+		}
+		if value == "" && strings.HasPrefix(expr, "hooks.") {
+			key := strings.TrimPrefix(expr, "hooks.")
+			value = data.Hooks[key]
+		}
+	}
+	if filter == "nl" {
+		return value + "\n", nil
+	}
+	return value, nil
+}
+
+func normalizeRenderedOutput(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.TrimLeft(text, "\n")
+	text = strings.TrimRight(text, "\n")
+	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
+	return text
 }
 
 func defaultTemplate(shell string) string {

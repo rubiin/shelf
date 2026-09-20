@@ -59,3 +59,28 @@ func TestScriptUsesPluginApplyTemplates(t *testing.T) {
 		t.Fatalf("script should not fall back to source when apply is defer: %q", script)
 	}
 }
+
+func TestScriptExpandsHookTemplateLoops(t *testing.T) {
+	template := "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh", "/tmp/two.zsh"},
+		Apply: []string{"defer"},
+		Hooks: map[string]string{"pre": "echo pre", "post": "echo post"},
+	}}}, "zsh", map[string]string{"defer": template})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "echo pre") || !strings.Contains(script, "echo post") {
+		t.Fatalf("hook template output missing from script: %q", script)
+	}
+	if !strings.Contains(script, "zsh-defer source \"/tmp/one.zsh\"") || !strings.Contains(script, "zsh-defer source \"/tmp/two.zsh\"") {
+		t.Fatalf("defer loop output missing from script: %q", script)
+	}
+	if strings.Contains(script, "{{ hooks?.pre") || strings.Contains(script, "{% for file in files %}") {
+		t.Fatalf("template syntax was left literal in script: %q", script)
+	}
+	if strings.Contains(script, "\n\n\n") {
+		t.Fatalf("script contains excessive blank lines: %q", script)
+	}
+}
