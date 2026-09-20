@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 	"shelf/internal/config"
@@ -28,7 +28,7 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 		if err != nil {
 			return LockedConfig{}, fmt.Errorf("install plugin %q: %w", name, err)
 		}
-		files := []string{}
+		var files []string
 		if installed.File != "" {
 			files = []string{installed.File}
 		} else {
@@ -62,8 +62,8 @@ func Write(path string, locked LockedConfig) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	return toml.NewEncoder(file).Encode(locked)
+	encodeErr := toml.NewEncoder(file).Encode(locked)
+	return errors.Join(encodeErr, file.Close())
 }
 
 func Read(path string) (LockedConfig, error) {
@@ -99,8 +99,4 @@ func fingerprint(path string) string {
 	}
 	hash := sha256.Sum256(contents)
 	return hex.EncodeToString(hash[:])
-}
-
-func normalizePath(path string) string {
-	return strings.TrimSuffix(filepath.Clean(path), string(filepath.Separator))
 }

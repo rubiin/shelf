@@ -13,7 +13,7 @@ func installRemote(ctx context.Context, dataDir string, request Request) (Instal
 	if err != nil {
 		return Installed{}, fmt.Errorf("download remote source: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return Installed{}, fmt.Errorf("download remote source: HTTP %s", response.Status)
 	}
@@ -27,13 +27,13 @@ func installRemote(ctx context.Context, dataDir string, request Request) (Instal
 		return Installed{}, err
 	}
 	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
+	defer func() { _ = os.Remove(temporaryName) }()
 	if _, err := temporary.ReadFrom(response.Body); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return Installed{}, err
 	}
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return Installed{}, err
 	}
 	if err := temporary.Close(); err != nil {

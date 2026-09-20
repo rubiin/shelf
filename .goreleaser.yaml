@@ -47,25 +47,10 @@ archives:
         dst: completions
         strip_parent: true
 
-changelog:
-  sort: desc
-  use: git
-
-  groups:
-    - title: 🚀 New Features
-      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
-      order: 0
-    - title: "🐛 Bug Fixes"
-      regexp: '^.*?bug(\([[:word:]]+\))??!?:.+$'
-      order: 1
-    - title: Others
-      order: 999
-
-
 nfpms:
-  - package_name: ignit
+  - package_name: shelf
     file_name_template: '{{ .ConventionalFileName }}'
-    homepage: https://github.com/rubiin/ignit
+    homepage: https://github.com/rubiin/shelf
     description: Quickly generate .gitignore files for your projects from a curated list of environment templates.
     license: GPL-3.0-only
     maintainer: rubiin <roobin.bhandari@gmail.com>
@@ -76,7 +61,7 @@ nfpms:
     bindir: /usr/bin
     contents:
       - src: ./LICENSE
-        dst: /usr/share/licenses/ignit/LICENSE
+        dst: /usr/share/licenses/shelf/LICENSE
 
 changelog:
   sort: desc
