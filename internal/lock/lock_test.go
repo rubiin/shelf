@@ -11,9 +11,13 @@ import (
 
 type testInstaller struct {
 	directory string
+	lastDir   *string
 }
 
 func (installer testInstaller) Install(_ context.Context, request source.Request) (source.Installed, error) {
+	if installer.lastDir != nil {
+		*installer.lastDir = request.Dir
+	}
 	return source.Installed{
 		Directory: installer.directory,
 		File:      filepath.Join(installer.directory, request.Name+".plugin.zsh"),
@@ -35,5 +39,22 @@ func TestBuildPreservesPluginDeclarationOrder(t *testing.T) {
 	}
 	if len(locked.Plugins) != 2 || locked.Plugins[0].Name != "zsh-defer" || locked.Plugins[1].Name != "zsh-vi-mode" {
 		t.Fatalf("plugin order = %v", []string{locked.Plugins[0].Name, locked.Plugins[1].Name})
+	}
+}
+
+func TestBuildPassesPluginDirectoryToInstaller(t *testing.T) {
+	requestedDirectory := ""
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"sudo": {Inline: "echo sudo", Dir: "plugins/sudo"},
+	}}
+
+	if _, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{
+		directory: t.TempDir(),
+		lastDir:   &requestedDirectory,
+	}, ModeNormal); err != nil {
+		t.Fatal(err)
+	}
+	if requestedDirectory != "plugins/sudo" {
+		t.Fatalf("requested directory = %q", requestedDirectory)
 	}
 }

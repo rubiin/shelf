@@ -12,7 +12,7 @@ func installLocal(request Request) (Installed, error) {
 		return Installed{}, fmt.Errorf("local source: %w", err)
 	}
 	if info.IsDir() {
-		return Installed{Directory: filepath.Clean(request.Local)}, nil
+		return Installed{Directory: sourceDirectory(request.Local, request.Dir)}, nil
 	}
 	return Installed{Directory: filepath.Dir(request.Local), File: filepath.Clean(request.Local)}, nil
 }
