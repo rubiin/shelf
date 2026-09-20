@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"shelf/internal/tui"
 )
 
 func TestInlineLockAndSource(t *testing.T) {
@@ -280,6 +283,123 @@ func TestCleanRemovesUnconfiguredPluginDirectories(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "plugins", "obsolete")); !os.IsNotExist(err) {
 		t.Fatalf("obsolete plugin remains: %v", err)
+	}
+}
+
+func TestRemoveInteractiveRemovesSelected(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.alpha]\ninline = \"echo a\"\n\n[plugins.beta]\ninline = \"echo b\"\n\n[plugins.gamma]\ninline = \"echo g\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	original := interactiveSelect
+	interactiveSelect = func(options []string, _ io.Writer) ([]string, error) {
+		if len(options) != 3 {
+			t.Errorf("picker options = %v, want alpha, beta, gamma", options)
+		}
+		return []string{"beta"}, nil
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"remove", "--interactive"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "removed: beta") {
+		t.Fatalf("stdout = %q, want removed: beta", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "shelf lock") {
+		t.Fatalf("stderr = %q, want relock hint", stderr.String())
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "plugins.beta") {
+		t.Fatalf("beta still configured: %s", contents)
+	}
+	if !strings.Contains(string(contents), "plugins.alpha") || !strings.Contains(string(contents), "plugins.gamma") {
+		t.Fatalf("unselected plugins lost: %s", contents)
+	}
+}
+
+func TestRemoveInteractiveCancelledKeepsConfig(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	original := "shell = \"zsh\"\n\n[plugins.alpha]\ninline = \"echo a\"\n"
+	if err := os.WriteFile(configFile, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalSelect := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		return nil, tui.ErrCancelled
+	}
+	t.Cleanup(func() { interactiveSelect = originalSelect })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"remove", "--interactive"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cancel should not be an error: %v", err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != original {
+		t.Fatalf("config changed after cancel: %s", contents)
+	}
+	if !strings.Contains(stderr.String(), "cancelled") {
+		t.Fatalf("stderr = %q, want cancelled message", stderr.String())
+	}
+}
+
+func TestRemoveInteractiveRejectsNameArgument(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"remove", "--interactive", "alpha"}, &stdout, &stderr); err == nil {
+		t.Fatal("expected error when NAME is combined with --interactive")
+	}
+}
+
+func TestRemoveInteractiveRequiresTerminal(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.alpha]\ninline = \"echo a\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"remove", "--interactive"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("err = %v, want terminal error", err)
 	}
 }
 

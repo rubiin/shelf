@@ -125,6 +125,7 @@ shelf list
 shelf add NAME ...
 shelf edit
 shelf remove NAME
+shelf remove --interactive
 shelf completions SHELL
 shelf version
 ```

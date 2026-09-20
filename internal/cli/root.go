@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -8,11 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/spf13/cobra"
 	"shelf/internal/config"
 	"shelf/internal/lock"
 	"shelf/internal/render"
 	"shelf/internal/source"
+	"shelf/internal/tui"
 )
 
 var (
@@ -193,13 +197,33 @@ func NewRoot() *cobra.Command {
 	command.AddCommand(addCommand)
 
 	command.AddCommand(&cobra.Command{Use: "edit", Short: "Open the configuration in an editor", RunE: func(_ *cobra.Command, _ []string) error { return editConfig() }})
-	command.AddCommand(&cobra.Command{Use: "remove NAME", Short: "Remove a plugin from the configuration", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
-		paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-		if err != nil {
-			return err
-		}
-		return config.Remove(paths.ConfigFile, args[0])
-	}})
+	var removeInteractive bool
+	removeCommand := &cobra.Command{
+		Use:   "remove [NAME]",
+		Short: "Remove a plugin from the configuration",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
+			if err != nil {
+				return err
+			}
+			if removeInteractive {
+				if len(args) > 0 {
+					return fmt.Errorf("NAME cannot be combined with --interactive")
+				}
+				if nonInteractive {
+					return fmt.Errorf("remove --interactive cannot be used with --non-interactive")
+				}
+				return removeInteractiveConfig(cmd, paths)
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("accepts 1 arg(s), received 0")
+			}
+			return config.Remove(paths.ConfigFile, args[0])
+		},
+	}
+	removeCommand.Flags().BoolVarP(&removeInteractive, "interactive", "i", false, "select plugins to remove interactively")
+	command.AddCommand(removeCommand)
 	command.AddCommand(&cobra.Command{Use: "completions SHELL", Short: "Generate shell completion scripts", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		switch args[0] {
 		case "bash":
@@ -394,6 +418,45 @@ func updateSources(output io.Writer, concurrency int) error {
 	}
 	_, err = io.WriteString(output, script)
 	return err
+}
+
+// interactiveSelect is the picker behind remove --interactive. It is a
+// package-level variable so tests can script the selection.
+var interactiveSelect = func(options []string, out io.Writer) ([]string, error) {
+	return tui.Select(options, tui.IO{In: os.Stdin, Out: out, MakeRaw: term.MakeRaw, Restore: term.Restore})
+}
+
+func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
+	locked, err := lock.Read(filepath.Join(paths.ConfigDirectory, "plugins.lock"))
+	if err != nil {
+		return fmt.Errorf("read lock file: %w", err)
+	}
+	if len(locked.Plugins) == 0 {
+		return fmt.Errorf("no plugins installed")
+	}
+	names := make([]string, 0, len(locked.Plugins))
+	for _, plugin := range locked.Plugins {
+		names = append(names, plugin.Name)
+	}
+	out := cmd.OutOrStdout()
+	selection, err := interactiveSelect(names, out)
+	if errors.Is(err, tui.ErrCancelled) {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cancelled")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, name := range selection {
+		if err := config.Remove(paths.ConfigFile, name); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "removed: %s\n", name)
+	}
+	if len(selection) > 0 {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "run 'shelf lock' to update the lock file")
+	}
+	return nil
 }
 
 func listPlugins(output io.Writer) error {

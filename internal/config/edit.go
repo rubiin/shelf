@@ -46,7 +46,7 @@ func Remove(path, name string) error {
 			start = index
 			continue
 		}
-		if start >= 0 && strings.HasPrefix(line, "[") {
+		if start >= 0 && strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "[plugins."+name+".") {
 			end = index
 			break
 		}
