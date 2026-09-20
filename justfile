@@ -7,7 +7,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo dev`
 # Build the shelf binary
 build:
     @echo "Building shelf version: {{version}}"
-    go build -ldflags "-s -w -X main.version={{version}}" -o shelf ./cmd/shelf
+    CGO_ENABLED=0 go build -ldflags "-s -w -X main.version={{version}}" -o shelf ./cmd/shelf
 
 # Run all tests
 test:
