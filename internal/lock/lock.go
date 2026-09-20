@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/BurntSushi/toml"
 	"shelf/internal/config"
@@ -16,7 +17,8 @@ import (
 
 func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode) (LockedConfig, error) {
 	locked := LockedConfig{ConfigFingerprint: fingerprint(ctx.ConfigFile), Profile: ctx.Profile, Shell: ctx.Shell}
-	for name, plugin := range cfg.Plugins {
+	for _, name := range pluginNames(cfg) {
+		plugin := cfg.Plugins[name]
 		if !active(plugin.Profiles, ctx.Profile) {
 			continue
 		}
@@ -56,6 +58,25 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 		locked.Plugins = append(locked.Plugins, LockedPlugin{Name: name, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks})
 	}
 	return locked, nil
+}
+
+func pluginNames(cfg config.Config) []string {
+	seen := make(map[string]bool, len(cfg.Plugins))
+	names := make([]string, 0, len(cfg.Plugins))
+	for _, name := range cfg.PluginOrder {
+		if _, exists := cfg.Plugins[name]; exists && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	remaining := make([]string, 0, len(cfg.Plugins)-len(names))
+	for name := range cfg.Plugins {
+		if !seen[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	return append(names, remaining...)
 }
 
 func active(profiles []string, profile string) bool {
