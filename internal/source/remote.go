@@ -3,18 +3,30 @@ package source
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 )
 
+// remoteHTTPClient downloads remote sources; a variable so tests can inject a transport.
+var remoteHTTPClient = http.DefaultClient
+
+// remoteDrainLimit bounds how much of a failed response body is discarded before reuse.
+const remoteDrainLimit = 64 << 10
+
 func installRemote(ctx context.Context, dataDir string, request Request) (Installed, error) {
-	response, err := http.Get(request.Remote)
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, request.Remote, nil)
+	if err != nil {
+		return Installed{}, fmt.Errorf("download remote source: %w", err)
+	}
+	response, err := remoteHTTPClient.Do(httpRequest)
 	if err != nil {
 		return Installed{}, fmt.Errorf("download remote source: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, remoteDrainLimit))
 		return Installed{}, fmt.Errorf("download remote source: HTTP %s", response.Status)
 	}
 	directory := pluginDir(dataDir, request.Name)

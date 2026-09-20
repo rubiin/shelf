@@ -2,6 +2,8 @@ package source
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInstallerHandlesInlineSource(t *testing.T) {
@@ -57,6 +60,93 @@ func TestInstallerRejectsFailedRemoteSource(t *testing.T) {
 	_, err := installer.Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugin.zsh"})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404 Not Found") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestInstallerStopsRemoteDownloadWhenContextIsCancelled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		select {
+		case <-request.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo late\n"))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	_, err := installer.Install(ctx, Request{Name: "remote", Remote: server.URL + "/plugin.zsh"})
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+}
+
+// recordingBody counts how many bytes the installer reads from a failed response body.
+type recordingBody struct {
+	reader *strings.Reader
+	read   int
+	eof    bool
+}
+
+func (body *recordingBody) Read(buffer []byte) (int, error) {
+	count, err := body.reader.Read(buffer)
+	body.read += count
+	if err == io.EOF {
+		body.eof = true
+	}
+	return count, err
+}
+
+func (body *recordingBody) Close() error { return nil }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return fn(request) }
+
+func TestInstallerPropagatesRequestContext(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "marker")
+	var captured context.Context
+	previous := remoteHTTPClient
+	remoteHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		captured = request.Context()
+		return nil, errors.New("stop after capturing context")
+	})}
+	t.Cleanup(func() { remoteHTTPClient = previous })
+
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	if _, err := installer.Install(ctx, Request{Name: "remote", Remote: "https://example.com/plugin.zsh"}); err == nil {
+		t.Fatal("expected download error")
+	}
+	if captured == nil || captured.Value(contextKey{}) != "marker" {
+		t.Fatalf("request context = %v, want the context passed to Install", captured)
+	}
+}
+
+func TestInstallerDrainsFailedRemoteResponseBody(t *testing.T) {
+	payload := strings.Repeat("x", 4096)
+	body := &recordingBody{reader: strings.NewReader(payload)}
+	previous := remoteHTTPClient
+	remoteHTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Status:     "404 Not Found",
+			Body:       body,
+			Header:     http.Header{},
+		}, nil
+	})}
+	t.Cleanup(func() { remoteHTTPClient = previous })
+
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	_, err := installer.Install(context.Background(), Request{Name: "remote", Remote: "https://example.com/plugin.zsh"})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404 Not Found") {
+		t.Fatalf("error = %v", err)
+	}
+	if !body.eof {
+		t.Fatalf("failed response body was not drained: read %d of %d bytes", body.read, len(payload))
 	}
 }
 

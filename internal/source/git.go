@@ -10,7 +10,7 @@ import (
 )
 
 func installGit(ctx context.Context, dataDir string, request Request) (Installed, error) {
-	url := gitURL(request)
+	repositoryURL := gitURL(request)
 	if request.Git == "" && request.GitHub == "" && request.Gist == "" {
 		return Installed{}, fmt.Errorf("git source is empty")
 	}
@@ -24,7 +24,7 @@ func installGit(ctx context.Context, dataDir string, request Request) (Installed
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
 			return Installed{}, err
 		}
-		args := []string{"clone", "--recurse-submodules", "--", url, directory}
+		args := []string{"clone", "--recurse-submodules", "--", repositoryURL, directory}
 		if err := runGit(ctx, args...); err != nil {
 			return Installed{}, err
 		}
