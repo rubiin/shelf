@@ -22,6 +22,9 @@ import (
 	"shelf/internal/tui"
 )
 
+// Version is the release version, which main stamps through the linker.
+var Version = "dev"
+
 var (
 	quiet          bool
 	nonInteractive bool
@@ -283,7 +286,7 @@ func NewRoot() *cobra.Command {
 		Use:   "version",
 		Short: "Print shelf version information",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "shelf version dev")
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), "shelf version "+Version)
 			return err
 		},
 	})

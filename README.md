@@ -51,13 +51,21 @@ the `shelf` binary somewhere on your `PATH`.
 
 ### Build from source
 
-Install Go 1.23 or newer, then build the binary locally:
+Install Go 1.26 or newer, then build the binary locally:
 
 ```sh
 git clone https://github.com/rubiin/shelf.git
 cd shelf
-go build -o shelf ./cmd/shelf
+just build
 install -Dm755 shelf "$HOME/.local/bin/shelf"
+```
+
+`just build` (and every release build) passes `-trimpath`, `-buildvcs=false`,
+and `-ldflags "-s -w"`. That keeps the binary around 7 MB instead of 11 MB and
+makes builds reproducible. Without `just`, the same build is:
+
+```sh
+go build -trimpath -buildvcs=false -ldflags "-s -w" -o shelf ./cmd/shelf
 ```
 
 ## Getting started

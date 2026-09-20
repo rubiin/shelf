@@ -6,6 +6,11 @@ builds:
   - env:
       - CGO_ENABLED=0
     main: ./cmd/shelf
+    # -trimpath drops build paths and -buildvcs=false drops VCS stamping, which keeps builds
+    # reproducible and shaves a few kilobytes.
+    flags:
+      - -trimpath
+      - -buildvcs=false
     # main.go declares `version`; release builds override it here.
     ldflags:
       - -s -w
@@ -13,7 +18,6 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
 
 archives:
   - formats: [tar.gz]
