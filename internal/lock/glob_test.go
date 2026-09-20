@@ -91,6 +91,64 @@ func TestSelectFilesCollectsExplicitUsePatterns(t *testing.T) {
 	}
 }
 
+func TestSelectFilesMatchesNestedAndHiddenPaths(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"demo.zsh", ".hidden.zsh", "sub/nested.zsh"} {
+		if err := os.WriteFile(filepath.Join(directory, filepath.FromSlash(name)), []byte("echo test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := selectFiles(directory, "demo", "zsh", []string{"**/*.zsh"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(directory, ".hidden.zsh"), filepath.Join(directory, "demo.zsh"), filepath.Join(directory, "sub", "nested.zsh")}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestSelectFilesSkipsDirectoriesNamedLikeMatches(t *testing.T) {
+	// Only files are sourceable, so a directory named like a pattern must not be selected.
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "demo.zsh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("directory matched a file pattern: %v", got)
+	}
+}
+
+func TestSelectFilesIgnoresMissingDirectory(t *testing.T) {
+	got, err := selectFiles(filepath.Join(t.TempDir(), "absent"), "demo", "zsh", []string{"*.zsh"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want no matches", got)
+	}
+}
+
+func TestSelectFilesRejectsInvalidPattern(t *testing.T) {
+	if _, err := selectFiles(t.TempDir(), "demo", "zsh", []string{"[unclosed"}, false); err == nil {
+		t.Fatal("invalid pattern was accepted")
+	}
+}
+
 func TestSelectFilesDeduplicatesExplicitMatches(t *testing.T) {
 	directory := t.TempDir()
 	for _, name := range []string{"demo.zsh", "demo.sh"} {

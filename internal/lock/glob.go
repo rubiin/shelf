@@ -1,7 +1,9 @@
 package lock
 
 import (
-	"os"
+	"errors"
+	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,13 +41,27 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 		patterns = defaultMatches(shell)
 		firstMatch = true
 	}
+	candidates, err := collectFiles(directory)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	var files []string
 	for _, pattern := range patterns {
 		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
-		matches, err := doublestar.Glob(os.DirFS(directory), rendered)
-		if err != nil {
-			return nil, err
+		// Validate up front so a typo fails even when the tree holds no candidates.
+		if !doublestar.ValidatePattern(rendered) {
+			return nil, fmt.Errorf("invalid pattern: %s", pattern)
+		}
+		var matches []string
+		for _, candidate := range candidates {
+			matched, err := doublestar.Match(rendered, candidate)
+			if err != nil {
+				return nil, err
+			}
+			if matched {
+				matches = append(matches, candidate)
+			}
 		}
 		if len(matches) == 0 {
 			continue
@@ -53,7 +69,7 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 		sort.Strings(matches)
 		for _, match := range matches {
 			match = filepath.Join(directory, match)
-			if strings.HasSuffix(match, "/") || seen[match] {
+			if seen[match] {
 				continue
 			}
 			seen[match] = true
@@ -62,6 +78,32 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 		if firstMatch {
 			break
 		}
+	}
+	return files, nil
+}
+
+// collectFiles walks directory once and returns its non-directory paths, slash-separated.
+func collectFiles(directory string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(directory, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, filepath.ToSlash(relative))
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return files, nil
 }
