@@ -39,7 +39,7 @@ aurs:
     license: GPL-3.0-only
     maintainers:
       - "rubiin <roobin.bhandari@gmail.com>"
-    git_url: ssh://aur@aur.archlinux.org/shelf-bin.git
+    git_url: ssh://aur@aur.archlinux.org/shelf-sh.git
     private_key: "{{ .Env.AUR_KEY }}"
     provides:
       - shelf-sh
