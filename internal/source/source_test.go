@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,18 @@ func TestInstallerDownloadsRemoteSource(t *testing.T) {
 	}
 	if string(contents) != "echo remote\n" {
 		t.Fatalf("remote contents = %q", contents)
+	}
+}
+
+func TestInstallerRejectsFailedRemoteSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Error(writer, "not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	_, err := installer.Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugin.zsh"})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404 Not Found") {
+		t.Fatalf("error = %v", err)
 	}
 }

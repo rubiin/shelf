@@ -27,6 +27,22 @@ func TestTemplateExpandsFile(t *testing.T) {
 	}
 }
 
+func TestTemplateExpandsPluginValuesAndNewlineFilter(t *testing.T) {
+	template := "{{ name }} {{ dir }} {{ file }}\n{{ hooks?.pre | nl }}"
+	result, err := Template(template, template, PluginData{
+		Name:      "demo",
+		Directory: "/tmp/demo",
+		File:      "/tmp/demo/plugin.zsh",
+		Hooks:     map[string]string{"pre": "echo pre"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "demo /tmp/demo /tmp/demo/plugin.zsh\necho pre\n" {
+		t.Fatalf("result = %q", result)
+	}
+}
+
 func TestScriptIncludesPluginHooks(t *testing.T) {
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:  "demo",
@@ -37,6 +53,19 @@ func TestScriptIncludesPluginHooks(t *testing.T) {
 	}
 	if !strings.Contains(script, "echo hooked") {
 		t.Fatalf("hook output missing from script: %q", script)
+	}
+}
+
+func TestScriptRendersHooksInStableOrder(t *testing.T) {
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Hooks: map[string]string{"post": "echo post", "pre": "echo pre"},
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script != "echo post\necho pre\n" {
+		t.Fatalf("script = %q", script)
 	}
 }
 
@@ -57,6 +86,16 @@ func TestScriptUsesPluginApplyTemplates(t *testing.T) {
 	}
 	if strings.Contains(script, "source /tmp/demo.sh") {
 		t.Fatalf("script should not fall back to source when apply is defer: %q", script)
+	}
+}
+
+func TestScriptRejectsUnknownApplyTemplate(t *testing.T) {
+	_, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Apply: []string{"missing"},
+	}}}, "bash")
+	if err == nil || !strings.Contains(err.Error(), "unknown template: missing") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
