@@ -285,7 +285,7 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode) error {
 			return err
 		}
 	}
-	script, err := render.Script(locked, string(shell))
+	script, err := render.Script(locked, string(shell), cfg.Templates)
 	if err != nil {
 		return err
 	}

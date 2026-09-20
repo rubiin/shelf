@@ -32,12 +32,28 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 		if installed.File != "" {
 			files = []string{installed.File}
 		} else {
-			files, err = selectFiles(installed.Directory, plugin.Use)
+			patterns := plugin.Use
+			firstMatch := len(patterns) > 0
+			if len(patterns) == 0 {
+				patterns = cfg.Matches
+				if len(patterns) == 0 {
+					patterns = defaultMatches(ctx.Shell)
+				}
+				firstMatch = true
+			}
+			files, err = selectFiles(installed.Directory, name, ctx.Shell, patterns, firstMatch)
 			if err != nil {
 				return LockedConfig{}, fmt.Errorf("select plugin %q files: %w", name, err)
 			}
 		}
-		locked.Plugins = append(locked.Plugins, LockedPlugin{Name: name, Directory: installed.Directory, Files: files, Apply: plugin.Apply, Hooks: plugin.Hooks})
+		apply := plugin.Apply
+		if len(apply) == 0 {
+			apply = cfg.Apply
+		}
+		if len(apply) == 0 {
+			apply = []string{"source"}
+		}
+		locked.Plugins = append(locked.Plugins, LockedPlugin{Name: name, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks})
 	}
 	return locked, nil
 }
