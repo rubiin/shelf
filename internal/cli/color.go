@@ -7,10 +7,12 @@ import (
 )
 
 const (
-	ansiReset       = "\x1b[0m"
-	ansiHeaderColor = "\x1b[1;35m"
-	ansiStatusColor = "\x1b[1;36m"
-	statusWidth     = 10
+	ansiReset        = "\x1b[0m"
+	ansiHeaderColor  = "\x1b[1;35m"
+	ansiStatusColor  = "\x1b[1;36m"
+	ansiWarningColor = "\x1b[1;33m"
+	ansiErrorColor   = "\x1b[1;31m"
+	statusWidth      = 10
 )
 
 // colorEnabled reports whether ANSI colors should be emitted for the requested mode.
@@ -44,7 +46,7 @@ func isTerminal(w io.Writer) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// colors formats diagnosis prefixes: bold magenta headers and bold cyan statuses.
+// colors formats diagnosis prefixes: bold magenta headers, bold cyan statuses, bold yellow warnings.
 type colors struct{ enabled bool }
 
 func newColors(mode string, diagnostics io.Writer) colors {
@@ -64,4 +66,19 @@ func (c colors) status(prefix string) string {
 		return prefix
 	}
 	return ansiStatusColor + prefix + ansiReset
+}
+
+func (c colors) warning(prefix string) string {
+	prefix = fmt.Sprintf("%*s", statusWidth, prefix)
+	if !c.enabled {
+		return prefix
+	}
+	return ansiWarningColor + prefix + ansiReset
+}
+
+func (c colors) error(prefix string) string {
+	if !c.enabled {
+		return prefix
+	}
+	return ansiErrorColor + prefix + ansiReset
 }

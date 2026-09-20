@@ -30,7 +30,7 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 }
 
 func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Installer, mode Mode, concurrency int) (LockedConfig, error) {
-	locked := LockedConfig{ConfigFingerprint: ctx.fingerprint(), Profile: ctx.Profile, Shell: ctx.Shell}
+	locked := LockedConfig{ConfigFingerprint: ctx.fingerprint(), Profile: ctx.Profile, Shell: ctx.Shell, Templates: ctx.Templates}
 	type task struct {
 		name   string
 		plugin config.RawPlugin
@@ -38,7 +38,7 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 	var tasks []task
 	for _, name := range PluginNames(cfg) {
 		plugin := cfg.Plugins[name]
-		if !active(plugin.Profiles, ctx.Profile) {
+		if !Active(plugin.Profiles, ctx.Profile) {
 			continue
 		}
 		tasks = append(tasks, task{name: name, plugin: plugin})
@@ -113,9 +113,13 @@ dispatch:
 }
 
 func buildPlugin(installContext context.Context, ctx Context, cfg config.Config, installer source.Installer, mode Mode, name string, plugin config.RawPlugin) (LockedPlugin, error) {
+	// Inline plugins have nothing to install: the lock carries their text and renders it.
+	if plugin.Inline != "" {
+		return LockedPlugin{Name: name, Inline: plugin.Inline, Hooks: plugin.Hooks}, nil
+	}
 	installed, err := installer.Install(installContext, source.Request{
-		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Protocol: plugin.Protocol, Remote: plugin.Remote,
-		Local: plugin.Local, Inline: plugin.Inline, Ref: plugin.Rev, Branch: plugin.Branch,
+		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto, Remote: plugin.Remote,
+		Local: plugin.Local, Ref: plugin.Rev, Branch: plugin.Branch,
 		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
 	})
 	if err != nil {
@@ -172,7 +176,7 @@ func Restore(cfg config.Config, installer source.Installer, locked LockedConfig,
 		plugin := tasks[index]
 		configured := cfg.Plugins[plugin.Name]
 		if _, err := installer.Install(installContext, source.Request{
-			Name: plugin.Name, Git: configured.Git, GitHub: configured.GitHub, Gist: configured.Gist, Protocol: configured.Protocol,
+			Name: plugin.Name, Git: configured.Git, GitHub: configured.GitHub, Gist: configured.Gist, Proto: configured.Proto,
 			Ref: plugin.Rev, Dir: configured.Dir,
 		}); err != nil {
 			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
@@ -218,9 +222,13 @@ func PluginNames(cfg config.Config) []string {
 	return append(names, remaining...)
 }
 
-func active(profiles []string, profile string) bool {
-	if len(profiles) == 0 || profile == "" {
+// Active reports whether a plugin loads for the profile; a plugin with profiles needs one selected.
+func Active(profiles []string, profile string) bool {
+	if len(profiles) == 0 {
 		return true
+	}
+	if profile == "" {
+		return false
 	}
 	for _, candidate := range profiles {
 		if candidate == profile {
@@ -270,6 +278,10 @@ func Verify(path string, ctx Context) (bool, error) {
 
 // VerifyLocked checks an already-read lock file against the context, avoiding a second read.
 func VerifyLocked(locked LockedConfig, ctx Context) bool {
+	// A lock without templates predates lock-recorded templates, so it is rebuilt once.
+	if len(locked.Templates) == 0 {
+		return false
+	}
 	if locked.Profile != ctx.Profile || locked.Shell != ctx.Shell || locked.ConfigFingerprint != ctx.fingerprint() {
 		return false
 	}

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -49,6 +51,8 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 	var files []string
 	for _, pattern := range patterns {
 		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
+		// Clean like the glob walk did, so patterns such as `./*.zsh` still match relative paths.
+		rendered = path.Clean(rendered)
 		// Validate up front so a typo fails even when the tree holds no candidates.
 		if !doublestar.ValidatePattern(rendered) {
 			return nil, fmt.Errorf("invalid pattern: %s", pattern)
@@ -84,6 +88,13 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 
 // collectFiles walks directory once and returns its non-directory paths, slash-separated.
 func collectFiles(directory string) ([]string, error) {
+	// Only a missing plugin directory is empty; every other walk failure is reported.
+	if _, err := os.Stat(directory); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	var files []string
 	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -100,9 +111,6 @@ func collectFiles(directory string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	return files, nil

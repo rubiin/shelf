@@ -143,6 +143,101 @@ func TestAddRefusesToWriteConfigItCannotReload(t *testing.T) {
 	}
 }
 
+func TestAddWritesProtoRatherThanProtocol(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(path, "private", RawPlugin{GitHub: "rubiin/repository", Proto: "ssh"}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "proto = \"ssh\"") || strings.Contains(string(contents), "protocol") {
+		t.Fatalf("config = %s, want the proto spelling", contents)
+	}
+}
+
+func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	original := "shell = \"zsh\"\n\nplugins.fzf.inline = \"echo fzf\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "fzf"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "fzf") {
+		t.Fatalf("dotted key plugin survived remove: %s", contents)
+	}
+	if !strings.Contains(string(contents), "[plugins.kept]") {
+		t.Fatalf("unrelated plugin lost: %s", contents)
+	}
+}
+
+func TestRemoveDeletesQuotedPluginName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	original := "shell = \"zsh\"\n\n[plugins.\"my.plugin\"]\ninline = \"echo mine\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "my.plugin"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "my.plugin") {
+		t.Fatalf("quoted plugin survived remove: %s", contents)
+	}
+	if !strings.Contains(string(contents), "[plugins.kept]") {
+		t.Fatalf("unrelated plugin lost: %s", contents)
+	}
+}
+
+func TestRemoveLeavesDottedKeysThatBelongToAnotherTable(t *testing.T) {
+	// A dotted key after a table header belongs to that table, so it is not a top-level plugin.
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	original := "shell = \"zsh\"\n\n[plugins.owner]\ninline = \"echo owner\"\nplugins.guest.inline = \"echo guest\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "guest"); err == nil {
+		t.Fatal("remove accepted a plugin that is not declared at the top level")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != original {
+		t.Fatalf("failed remove changed the config: %s", contents)
+	}
+}
+
+func TestRemoveKeepsFileMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n\n[plugins.gone]\ninline = \"echo gone\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode = %v, want 0640", info.Mode().Perm())
+	}
+}
+
 func TestAddAndRemovePreserveUnrelatedTOML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"bash\"\n\n[templates]\ncustom = \"source {file}\"\n"

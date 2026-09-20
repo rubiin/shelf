@@ -47,6 +47,18 @@ func Add(path, name string, plugin RawPlugin) error {
 
 // writeVerified replaces path only when the new contents decode and validate, via temp file and rename.
 func writeVerified(path string, contents []byte) error {
+	written, err := decode(contents)
+	if err != nil {
+		return err
+	}
+	if err := Validate(written); err != nil {
+		return err
+	}
+	return writeAtomically(path, contents)
+}
+
+// writeAtomically keeps the existing mode and replaces path through a temp file and rename.
+func writeAtomically(path string, contents []byte) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*.toml")
 	if err != nil {
 		return err
@@ -66,43 +78,71 @@ func writeVerified(path string, contents []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	written, err := Load(temporaryName)
-	if err != nil {
-		return err
-	}
-	if err := Validate(written); err != nil {
-		return err
-	}
 	return os.Rename(temporaryName, path)
 }
 
+// Remove deletes a plugin, whether it is declared as a table, a dotted key, or a quoted name.
 func Remove(path, name string) error {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	target := "[plugins." + name + "]"
+	removed := false
+	inside := false
+	root := true
 	lines := strings.Split(string(contents), "\n")
-	start := -1
-	end := len(lines)
-	for index, line := range lines {
-		if line == target {
-			start = index
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		header := normalizeTableHeader(line)
+		switch {
+		case header != "":
+			// A dotted key after any table header belongs to that table, not to a top-level plugin.
+			root = false
+			inside = isPluginTable(header, name)
+			if inside {
+				removed = true
+				continue
+			}
+		case root && !inside && isDottedPluginKey(line, name):
+			removed = true
 			continue
 		}
-		if start >= 0 && strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "[plugins."+name+".") {
-			end = index
-			break
+		if inside {
+			continue
 		}
+		kept = append(kept, line)
 	}
-	if start >= 0 {
-		lines = append(lines[:start], lines[end:]...)
-	}
-	updated := []byte(strings.Join(lines, "\n"))
-	if string(updated) == string(contents) {
+	if !removed {
 		return fmt.Errorf("plugin %q not found", name)
 	}
-	return os.WriteFile(path, updated, 0o600)
+	return writeAtomically(path, []byte(strings.Join(kept, "\n")))
+}
+
+// normalizeTableHeader returns a table header without spaces or quotes, or "" for other lines.
+func normalizeTableHeader(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' || strings.HasPrefix(trimmed, "[[") {
+		return ""
+	}
+	removed := strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")
+	return removed.Replace(trimmed)
+}
+
+// isPluginTable reports whether a normalized header is the plugin's table or one of its subtables.
+func isPluginTable(header, name string) bool {
+	prefix := "[plugins." + name
+	return header == prefix+"]" || strings.HasPrefix(header, prefix+".")
+}
+
+// isDottedPluginKey reports whether a line assigns a plugins.<name>.<field> or plugins.<name>.<hook> key.
+func isDottedPluginKey(line, name string) bool {
+	trimmed := strings.TrimSpace(line)
+	assignment := strings.Index(trimmed, "=")
+	if assignment < 0 {
+		return false
+	}
+	key := strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "").Replace(trimmed[:assignment])
+	return strings.HasPrefix(key, "plugins."+name+".")
 }
 
 func encodePlugin(name string, plugin RawPlugin) string {
@@ -111,7 +151,7 @@ func encodePlugin(name string, plugin RawPlugin) string {
 		{"github", plugin.GitHub}, {"git", plugin.Git}, {"gist", plugin.Gist},
 		{"remote", plugin.Remote}, {"local", plugin.Local}, {"inline", plugin.Inline},
 		{"rev", plugin.Rev}, {"branch", plugin.Branch}, {"tag", plugin.Tag},
-		{"protocol", plugin.Protocol}, {"dir", plugin.Dir}, {"file", plugin.File},
+		{"proto", plugin.Proto}, {"dir", plugin.Dir}, {"file", plugin.File},
 	}
 	for _, field := range fields {
 		if field.value != "" {

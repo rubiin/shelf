@@ -16,15 +16,3 @@ func installLocal(request Request) (Installed, error) {
 	}
 	return Installed{Directory: filepath.Dir(request.Local), File: filepath.Clean(request.Local)}, nil
 }
-
-func installInline(dataDir string, request Request) (Installed, error) {
-	directory := pluginDir(dataDir, request.Name)
-	if err := ensureDir(directory); err != nil {
-		return Installed{}, err
-	}
-	file := filepath.Join(directory, "inline.sh")
-	if err := os.WriteFile(file, []byte(request.Inline), 0o600); err != nil {
-		return Installed{}, err
-	}
-	return Installed{Directory: directory, File: file}, nil
-}

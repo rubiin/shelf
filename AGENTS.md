@@ -56,6 +56,3 @@ go test ./internal/render -run TestName
 - Do not change `SHELF_*` names or shelf default directories without updating tests and README.
 - Do not commit changes unless explicitly requested.
 
-## Compatibility notes
-
-Original Sheldon tests are the behavioral reference. Adapt only project identifiers when porting them: `sheldon` becomes `shelf`, `SHELDON_*` becomes `SHELF_*`, and default `sheldon` directories become `shelf`. Preserve command names and command behavior.

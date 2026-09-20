@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"shelf/internal/source"
 	"shelf/internal/tui"
 )
 
@@ -56,7 +57,7 @@ func TestUpdateEmitsSourceWithoutWritingLockfile(t *testing.T) {
 	if !strings.Contains(output.String(), "echo updated") {
 		t.Fatalf("update output = %q", output.String())
 	}
-	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(directory, "data", "plugins.lock")); !os.IsNotExist(err) {
 		t.Fatalf("update wrote lock file: %v", err)
 	}
 }
@@ -82,7 +83,7 @@ func TestUpdateLockWritesLockfileWithoutSource(t *testing.T) {
 	if output.Len() != 0 {
 		t.Fatalf("update --lock output = %q", output.String())
 	}
-	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); err != nil {
+	if _, err := os.Stat(filepath.Join(directory, "data", "plugins.lock")); err != nil {
 		t.Fatalf("update --lock did not write lock file: %v", err)
 	}
 }
@@ -103,13 +104,13 @@ func TestPathPrintsResolvedPaths(t *testing.T) {
 	want := "config_dir=" + configDir + "\n" +
 		"data_dir=" + dataDir + "\n" +
 		"config_file=" + configFile + "\n" +
-		"lock_file=" + filepath.Join(configDir, "plugins.lock") + "\n"
+		"lock_file=" + filepath.Join(dataDir, "plugins.lock") + "\n"
 	if output.String() != want {
 		t.Fatalf("path output = %q, want %q", output.String(), want)
 	}
 }
 
-func TestLockStoresLockfileInConfigDirectory(t *testing.T) {
+func TestLockStoresLockfileInDataDirectory(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
 	dataDir := filepath.Join(directory, "data")
@@ -126,11 +127,131 @@ func TestLockStoresLockfileInConfigDirectory(t *testing.T) {
 	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); err != nil {
-		t.Fatalf("lock file missing in config directory: %v", err)
+	if _, err := os.Stat(filepath.Join(dataDir, "plugins.lock")); err != nil {
+		t.Fatalf("lock file missing in data directory: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "plugins.lock")); err == nil {
-		t.Fatal("lock file was written under the data directory")
+	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); err == nil {
+		t.Fatal("lock file was written under the config directory")
+	}
+}
+
+func TestLockUsesAProfileSpecificLockFile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	config := "shell = \"zsh\"\n\n[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+	t.Setenv("SHELF_PROFILE", "work")
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	profileLock := filepath.Join(dataDir, "plugins.work.lock")
+	contents, err := os.ReadFile(profileLock)
+	if err != nil {
+		t.Fatalf("profile lock file missing: %v", err)
+	}
+	if !strings.Contains(string(contents), "name = \"work\"") || !strings.Contains(string(contents), "profile = \"work\"") {
+		t.Fatalf("profile lock file = %s", contents)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "plugins.lock")); !os.IsNotExist(err) {
+		t.Fatalf("unprofiled lock file was written: %v", err)
+	}
+}
+
+func TestProfileExcludesPluginsWithoutASelectedProfile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(dataDir, "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "name = \"work\"") {
+		t.Fatalf("plugin with profiles was locked without a selected profile: %s", contents)
+	}
+	if !strings.Contains(string(contents), "name = \"always\"") {
+		t.Fatalf("plugin without profiles was skipped: %s", contents)
+	}
+}
+
+func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	config := "shell = \"zsh\"\n\nplugins.fzf.inline = \"echo fzf\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"remove", "fzf"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "fzf") {
+		t.Fatalf("dotted key plugin survived remove: %s", contents)
+	}
+	if !strings.Contains(string(contents), "[plugins.kept]") {
+		t.Fatalf("unrelated plugin lost: %s", contents)
+	}
+}
+
+func TestAddWritesProtoField(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"add", "private", "--github", "rubiin/repository", "--proto", "ssh"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "proto = \"ssh\"") {
+		t.Fatalf("add did not write the proto field: %s", contents)
 	}
 }
 
@@ -170,7 +291,10 @@ func TestListReflectsConfigNotStaleLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	staleLock := "config_fingerprint = \"stale\"\nshell = \"zsh\"\n\n[[plugins]]\n  name = \"removed\"\n  directory = \"/tmp/removed\"\n  files = []\n"
-	if err := os.WriteFile(filepath.Join(configDir, "plugins.lock"), []byte(staleLock), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(directory, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "data", "plugins.lock"), []byte(staleLock), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELF_CONFIG_DIR", configDir)
@@ -303,7 +427,10 @@ func TestStatusReportsDriftedGitRevision(t *testing.T) {
 	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	checkout := filepath.Join(directory, "data", "plugins", "test")
+	checkout, err := source.GitDirectory(filepath.Join(directory, "data"), source.Request{Git: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if output, err := exec.Command("git", "-C", checkout, "checkout", "--detach", currentRevision).CombinedOutput(); err != nil {
 		t.Fatalf("checkout drifted revision: %v\n%s", err, output)
 	}
@@ -355,6 +482,7 @@ func TestCleanRemovesUnconfiguredPluginDirectories(t *testing.T) {
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.current]\ninline = \"echo current\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Inline plugins are stored in the lock file, so their old install directories are unowned.
 	for _, name := range []string{"current", "obsolete"} {
 		if err := os.MkdirAll(filepath.Join(dataDir, "plugins", name), 0o755); err != nil {
 			t.Fatal(err)
@@ -368,14 +496,64 @@ func TestCleanRemovesUnconfiguredPluginDirectories(t *testing.T) {
 	if err := Execute([]string{"clean"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "removed: obsolete\n" {
+	if output.String() != "removed: plugins/current\nremoved: plugins/obsolete\n" {
 		t.Fatalf("clean output = %q", output.String())
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "plugins", "current")); err != nil {
-		t.Fatalf("configured plugin was removed: %v", err)
+	for _, name := range []string{"current", "obsolete"} {
+		if _, err := os.Stat(filepath.Join(dataDir, "plugins", name)); !os.IsNotExist(err) {
+			t.Fatalf("plugin directory %q remains: %v", name, err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "plugins", "obsolete")); !os.IsNotExist(err) {
-		t.Fatalf("obsolete plugin remains: %v", err)
+}
+
+func TestCleanKeepsOwnedSourcesAndPrunesTheRest(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	config := "shell = \"zsh\"\n\n[plugins.kept]\ngithub = \"rubiin/kept\"\n\n[plugins.inline]\ninline = \"echo inline\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directories := []string{
+		filepath.Join(dataDir, "repos", "github.com", "rubiin", "kept"),
+		filepath.Join(dataDir, "repos", "github.com", "rubiin", "gone"),
+		filepath.Join(dataDir, "repos", "example.com"),
+		filepath.Join(dataDir, "downloads", "example.com"),
+		filepath.Join(dataDir, "plugins", "inline"),
+		filepath.Join(dataDir, "plugins", "obsolete"),
+	}
+	for _, path := range directories {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	var output bytes.Buffer
+	if err := Execute([]string{"clean"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "removed: repos/example.com\n" +
+		"removed: repos/github.com/rubiin/gone\n" +
+		"removed: downloads/example.com\n" +
+		"removed: plugins/inline\n" +
+		"removed: plugins/obsolete\n"
+	if output.String() != want {
+		t.Fatalf("clean output = %q, want %q", output.String(), want)
+	}
+	if _, err := os.Stat(directories[0]); err != nil {
+		t.Fatalf("owned source was removed: %v", err)
+	}
+	for _, path := range []string{directories[4], directories[5]} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("unowned plugin directory %q remains: %v", path, err)
+		}
 	}
 }
 
@@ -521,7 +699,10 @@ func TestSourceRestoresLockedGitRevision(t *testing.T) {
 	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	checkout := filepath.Join(directory, "data", "plugins", "test")
+	checkout, err := source.GitDirectory(filepath.Join(directory, "data"), source.Request{Git: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := exec.Command("git", "-C", checkout, "checkout", "--detach", "HEAD").Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -625,6 +806,79 @@ func checkedSources(stderr string) []string {
 		}
 	}
 	return sources
+}
+
+func TestLockReportsSkippedPlugins(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n[plugins.work]\nprofiles = [\"work\"]\ngithub = \"rubiin/work\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkedSources(stderr.String()); !slices.Equal(got, []string{"inline"}) {
+		t.Fatalf("checked sources = %q, want [inline]", got)
+	}
+	if !strings.Contains(stderr.String(), "   Skipped https://github.com/rubiin/work") {
+		t.Fatalf("stderr = %q, want a skipped status for the profiled plugin", stderr.String())
+	}
+}
+
+func TestSourceReportsUnlockedAndRenderedWhenVerbose(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"--verbose", "source"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Unlocked ", "   Inlined test"} {
+		if !strings.Contains(stderr.String(), expected) {
+			t.Errorf("verbose source diagnostics missing %q: %q", expected, stderr.String())
+		}
+	}
+}
+
+func TestFailuresPrintAnErrorLineOnce(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "absent", "plugins.toml"))
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(directory, "absent"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err == nil {
+		t.Fatal("expected a failure for a missing config file")
+	}
+	if !strings.HasPrefix(stderr.String(), "\nerror: ") {
+		t.Fatalf("stderr = %q, want an error line with a status prefix", stderr.String())
+	}
+	if strings.Count(stderr.String(), "error: ") != 1 {
+		t.Fatalf("stderr = %q, want the error reported once", stderr.String())
+	}
 }
 
 func TestLockDiagnosticsFollowConfigOrder(t *testing.T) {

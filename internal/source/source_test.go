@@ -14,21 +14,6 @@ import (
 	"time"
 )
 
-func TestInstallerHandlesInlineSource(t *testing.T) {
-	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
-	installed, err := installer.Install(context.Background(), Request{Name: "inline", Inline: "echo hello\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(installed.File)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != "echo hello\n" {
-		t.Fatalf("inline contents = %q", contents)
-	}
-}
-
 func TestInstallerDownloadsRemoteSource(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusOK)
@@ -191,16 +176,155 @@ func TestInstallerUsesGitSubdirectory(t *testing.T) {
 	}
 }
 
-func TestGitURLSupportsGistAndProtocols(t *testing.T) {
+func TestGitDirectoryLayout(t *testing.T) {
+	dataDir := t.TempDir()
 	tests := []struct {
 		name    string
 		request Request
 		want    string
 	}{
-		{name: "gist", request: Request{Gist: "579d02802b1cc17baed07753d09f5009"}, want: "https://gist.github.com/579d02802b1cc17baed07753d09f5009.git"},
-		{name: "github ssh", request: Request{GitHub: "owner/repository", Protocol: "ssh"}, want: "git@github.com:owner/repository.git"},
-		{name: "github git", request: Request{GitHub: "owner/repository", Protocol: "git"}, want: "git://github.com/owner/repository.git"},
-		{name: "github https", request: Request{GitHub: "owner/repository", Protocol: "https"}, want: "https://github.com/owner/repository.git"},
+		{
+			name:    "github",
+			request: Request{GitHub: "rubiin/plugin-test"},
+			want:    filepath.Join(dataDir, "repos", "github.com", "rubiin", "plugin-test"),
+		},
+		{
+			name:    "gist",
+			request: Request{Gist: "rubiin/579d02802b1cc17baed07753d09f5009"},
+			want:    filepath.Join(dataDir, "repos", "gist.github.com", "rubiin", "579d02802b1cc17baed07753d09f5009"),
+		},
+		{
+			name:    "git url keeps its suffix",
+			request: Request{Git: "https://example.com/plugins/plugin.git"},
+			want:    filepath.Join(dataDir, "repos", "example.com", "plugins", "plugin.git"),
+		},
+		{
+			name:    "local repository path",
+			request: Request{Git: "/srv/repositories/demo"},
+			want:    filepath.Join(dataDir, "repos", "srv", "repositories", "demo"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := GitDirectory(dataDir, test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("git directory = %q, want %q", got, test.want)
+			}
+		})
+	}
+	if _, err := GitDirectory(dataDir, Request{Git: "https://example.com"}); err == nil {
+		t.Fatal("a host-only URL was accepted")
+	}
+}
+
+func TestRemoteDirectoryLayout(t *testing.T) {
+	dataDir := t.TempDir()
+	directory, file, err := RemoteDirectory(dataDir, "https://github.com/rubiin/dotfiles/raw/0.3.0/LICENSE-MIT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDirectory := filepath.Join(dataDir, "downloads", "github.com", "rubiin", "dotfiles", "raw", "0.3.0")
+	if directory != wantDirectory {
+		t.Fatalf("download directory = %q, want %q", directory, wantDirectory)
+	}
+	if want := filepath.Join(wantDirectory, "LICENSE-MIT"); file != want {
+		t.Fatalf("download file = %q, want %q", file, want)
+	}
+
+	rootDirectory, rootFile, err := RemoteDirectory(dataDir, "https://example.com/plugin.zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rootDirectory != filepath.Join(dataDir, "downloads", "example.com") {
+		t.Fatalf("root download directory = %q", rootDirectory)
+	}
+	if rootFile != filepath.Join(rootDirectory, "plugin.zsh") {
+		t.Fatalf("root download file = %q", rootFile)
+	}
+	if _, _, err := RemoteDirectory(dataDir, "/plugins/plugin.zsh"); err == nil {
+		t.Fatal("a hostless remote URL was accepted")
+	}
+}
+
+func TestInstallerClonesIntoTheSourceLayout(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repository, "plugin.zsh"), []byte("echo test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Shelf Tests"},
+		{"add", "."},
+		{"commit", "-m", "initial"},
+	} {
+		command := exec.Command("git", args...)
+		command.Dir = repository
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installed, err := NewInstaller(dataDir).Install(context.Background(), Request{Name: "demo", Git: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(installed.Directory, CloneDir(dataDir)+string(filepath.Separator)) {
+		t.Fatalf("installed directory = %q, want a path under %q", installed.Directory, CloneDir(dataDir))
+	}
+	if filepath.Base(installed.Directory) != filepath.Base(repository) {
+		t.Fatalf("installed directory = %q, want it to end with %q", installed.Directory, filepath.Base(repository))
+	}
+	if _, err := os.Stat(filepath.Join(installed.Directory, ".git")); err != nil {
+		t.Fatalf("clone is missing: %v", err)
+	}
+}
+
+func TestInstallerDownloadsIntoTheSourceLayout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installed, err := NewInstaller(dataDir).Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugins/plugin.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keys downloads on the URL host without the port, like url.host_str().
+	host, _, _ := strings.Cut(strings.TrimPrefix(server.URL, "http://"), ":")
+	want := filepath.Join(DownloadDir(dataDir), host, "plugins", "plugin.zsh")
+	if installed.File != want {
+		t.Fatalf("downloaded file = %q, want %q", installed.File, want)
+	}
+	if installed.Directory != filepath.Dir(want) {
+		t.Fatalf("download directory = %q, want %q", installed.Directory, filepath.Dir(want))
+	}
+	contents, err := os.ReadFile(installed.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo remote\n" {
+		t.Fatalf("remote contents = %q", contents)
+	}
+}
+
+func TestGitURLProtocolPrefixes(t *testing.T) {
+	tests := []struct {
+		name    string
+		request Request
+		want    string
+	}{
+		{name: "gist", request: Request{Gist: "579d02802b1cc17baed07753d09f5009"}, want: "https://gist.github.com/579d02802b1cc17baed07753d09f5009"},
+		{name: "github ssh", request: Request{GitHub: "rubiin/repository", Proto: "ssh"}, want: "ssh://git@github.com/rubiin/repository"},
+		{name: "github git", request: Request{GitHub: "rubiin/repository", Proto: "git"}, want: "git://github.com/rubiin/repository"},
+		{name: "github https", request: Request{GitHub: "rubiin/repository", Proto: "https"}, want: "https://github.com/rubiin/repository"},
+		{name: "git url unchanged", request: Request{Git: "https://example.com/plugin.git"}, want: "https://example.com/plugin.git"},
 	}
 
 	for _, test := range tests {

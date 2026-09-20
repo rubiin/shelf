@@ -61,8 +61,8 @@ func TestSuppliedFingerprintAvoidsReadingTheConfig(t *testing.T) {
 	if err := os.WriteFile(file, []byte("echo test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx := Context{ConfigFile: filepath.Join(directory, "missing.toml"), ConfigFingerprint: "fingerprint", Shell: "zsh"}
-	cfg := config.Config{Plugins: map[string]config.RawPlugin{"test": {Inline: "echo hi"}}}
+	ctx := Context{ConfigFile: filepath.Join(directory, "missing.toml"), ConfigFingerprint: "fingerprint", Shell: "zsh", Templates: map[string]string{"source": "source \"{{ file }}\""}}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{"test": {GitHub: "rubiin/test"}}}
 	locked, err := Build(ctx, cfg, testInstaller{directory: pluginDirectory}, ModeNormal)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestSuppliedFingerprintAvoidsReadingTheConfig(t *testing.T) {
 		t.Fatal("lock file written with the supplied fingerprint did not verify")
 	}
 	// Without a fingerprint the fallback reads the missing config, so nothing can match.
-	stale := Context{ConfigFile: ctx.ConfigFile, Shell: "zsh"}
+	stale := Context{ConfigFile: ctx.ConfigFile, Shell: "zsh", Templates: ctx.Templates}
 	if valid, err := Verify(lockPath, stale); err != nil || valid {
 		t.Fatalf("verify without a fingerprint = %v, err = %v", valid, err)
 	}
@@ -97,8 +97,8 @@ func TestBuildRejectsNonPositiveConcurrency(t *testing.T) {
 
 func TestRestoreInstallsRevisionsInParallel(t *testing.T) {
 	cfg := config.Config{Plugins: map[string]config.RawPlugin{
-		"first":  {GitHub: "example/first"},
-		"second": {GitHub: "example/second"},
+		"first":  {GitHub: "rubiin/first"},
+		"second": {GitHub: "rubiin/second"},
 	}}
 	locked := LockedConfig{Plugins: []LockedPlugin{
 		{Name: "first", Rev: "aaaaaaaa"},
@@ -135,11 +135,10 @@ func TestRestoreSkipsPluginsWithoutPinnedRevisions(t *testing.T) {
 }
 
 func TestBuildPreservesPluginDeclarationOrder(t *testing.T) {
-	cfg := config.Config{
-		Plugins: map[string]config.RawPlugin{
-			"zsh-vi-mode": {Inline: "echo vi"},
-			"zsh-defer":   {Inline: "echo defer"},
-		},
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"zsh-vi-mode": {GitHub: "rubiin/vi"},
+		"zsh-defer":   {GitHub: "rubiin/defer"},
+	},
 		PluginOrder: []string{"zsh-defer", "zsh-vi-mode"},
 	}
 
@@ -155,8 +154,8 @@ func TestBuildPreservesPluginDeclarationOrder(t *testing.T) {
 func TestBuildInstallsPluginsInParallel(t *testing.T) {
 	cfg := config.Config{
 		Plugins: map[string]config.RawPlugin{
-			"first":  {Inline: "echo first"},
-			"second": {Inline: "echo second"},
+			"first":  {GitHub: "rubiin/first"},
+			"second": {GitHub: "rubiin/second"},
 		},
 		PluginOrder: []string{"first", "second"},
 	}
@@ -191,7 +190,7 @@ func TestBuildInstallsPluginsInParallel(t *testing.T) {
 func TestBuildPassesPluginDirectoryToInstaller(t *testing.T) {
 	requestedDirectory := ""
 	cfg := config.Config{Plugins: map[string]config.RawPlugin{
-		"sudo": {Inline: "echo sudo", Dir: "plugins/sudo"},
+		"sudo": {GitHub: "rubiin/sudo", Dir: "plugins/sudo"},
 	}}
 
 	if _, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{
@@ -233,7 +232,7 @@ func TestBuildSelectsConfiguredPluginFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{Plugins: map[string]config.RawPlugin{
-		"sudo": {Inline: "echo sudo", File: "sudo.plugin.zsh"},
+		"sudo": {GitHub: "rubiin/sudo", File: "sudo.plugin.zsh"},
 	}}
 
 	locked, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: directory}, ModeNormal)
@@ -281,4 +280,40 @@ func (installer revisionInstaller) Install(_ context.Context, request source.Req
 		File:      filepath.Join(installer.directory, request.Name+".plugin.zsh"),
 		Revision:  installer.revision,
 	}, nil
+}
+
+func TestBuildRecordsInlinePluginsAndTemplates(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"test": {Inline: "echo {{ name }}", Hooks: map[string]string{"pre": "echo pre"}},
+	}}
+	installer := &countingInstaller{}
+	templates := map[string]string{"source": "source \"{{ file }}\""}
+	locked, err := Build(Context{Shell: "zsh", Templates: templates}, cfg, installer, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installer.calls != 0 {
+		t.Fatalf("installer called %d times, want 0 for an inline plugin", installer.calls)
+	}
+	if locked.Templates["source"] != templates["source"] {
+		t.Fatalf("locked templates = %v", locked.Templates)
+	}
+	plugin := locked.Plugins[0]
+	if plugin.Inline != "echo {{ name }}" || len(plugin.Files) != 0 || plugin.Directory != "" {
+		t.Fatalf("locked plugin = %+v", plugin)
+	}
+}
+
+func TestVerifyRejectsLockWithoutTemplates(t *testing.T) {
+	// A lock written before templates were recorded is rebuilt once.
+	directory := t.TempDir()
+	path := filepath.Join(directory, "plugins.lock")
+	locked := LockedConfig{ConfigFingerprint: "fingerprint", Shell: "zsh"}
+	if err := Write(path, locked); err != nil {
+		t.Fatal(err)
+	}
+	ctx := Context{ConfigFingerprint: "fingerprint", Shell: "zsh"}
+	if valid, err := Verify(path, ctx); err != nil || valid {
+		t.Fatalf("verify = %v, err = %v", valid, err)
+	}
 }

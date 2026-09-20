@@ -60,15 +60,6 @@ go build -o shelf ./cmd/shelf
 install -Dm755 shelf "$HOME/.local/bin/shelf"
 ```
 
-## Differences from Sheldon
-
-- Binary: `shelf` instead of `sheldon`.
-- Environment variables: `SHELF_*` instead of `SHELDON_*`.
-- Default config directory: `~/.config/shelf`.
-- Default data directory: `~/.local/share/shelf`.
-- Build system: Go modules instead of Cargo.
-- Lock files use equivalent TOML data, not byte-identical Sheldon output.
-
 ## Getting started
 
 Initialize a Bash or Zsh configuration:
@@ -146,13 +137,13 @@ Global options:
 --profile PROFILE
 ```
 
-Directory flags keep Sheldon’s names. Their environment equivalents use the
+Their environment equivalents use the
 `SHELF_` prefix:
 
 ```sh
 SHELF_CONFIG_DIR="$HOME/.config/shelf"
 SHELF_DATA_DIR="$HOME/.local/share/shelf"
-SHELF_CONFIG_FILE="$HOME/.config/shelf/config.toml"
+SHELF_CONFIG_FILE="$HOME/.config/shelf/plugins.toml"
 SHELF_PROFILE="work"
 SHELF_SHELL="zsh"
 SHELF_EDITOR="nvim --wait"
@@ -160,6 +151,9 @@ SHELF_EDITOR="nvim --wait"
 
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` still control base directories when
 explicit shelf directory flags are absent.
+
+The configuration file is `plugins.toml`. When `--config-file` is set without
+`--config-dir`, the configuration directory is that file's parent directory.
 
 `shelf edit` picks its editor in this order: `SHELF_EDITOR`, then `VISUAL`,
 then `EDITOR`. The value is split with shell-word rules, so quoted paths and
@@ -188,18 +182,56 @@ local = "/path/to/plugins"
 inline = "echo loaded"
 ```
 
-Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, and `file`.
-Profiles restrict loading to a selected `--profile`. `use` accepts recursive
-glob patterns relative to the installed plugin directory.
+Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, and
+`proto`. `proto` selects how `github` and `gist` sources are cloned: `https`
+(the default), `git`, or `ssh`. `shelf add --proto ssh` writes the same field.
+`use` accepts recursive glob patterns relative to the installed plugin
+directory.
 
-Locking records installed sources and selected files under:
+A plugin that sets `profiles` only loads while one of those profiles is
+selected by `--profile` or `SHELF_PROFILE`; a plugin without `profiles` always
+loads.
+
+Templates engine: `{{ value }}` expressions with `| nl` filters,
+`{% if %} … {% else if %} … {% else %} … {% endif %}` conditionals, and
+`{% for file in files %}` loops that nest and expose `loop.index`,
+`loop.first`, and `loop.last`. Maps such as `hooks` iterate with two
+variables: `{% for name, value in hooks %}`. Lookups fail on a missing value
+unless it is written optionally, as in `{{ hooks?.pre }}`.
+
+```toml
+[templates]
+defer = "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
+```
+
+Bare `{name}`, `{dir}`, `{file}`, and `{nl}` placeholders remain available as a
+shelf extension for templates without `{{ }}` or `{% %}` blocks.
+
+Sources are installed in different paths: git sources under
+`$XDG_DATA_HOME/shelf/repos/<host>/<owner>/<repository>` and downloaded files
+under `$XDG_DATA_HOME/shelf/downloads/<host>/<path>`. Inline plugins install
+nothing: their text is recorded in the lock and rendered as a template, so each
+inline plugin can use `{{ name }}` and its hooks.
+
+Locking records the resolved templates, the installed sources, and the selected
+files under:
 
 ```text
-$XDG_CONFIG_HOME/shelf/plugins.lock
+$XDG_DATA_HOME/shelf/plugins.lock
+$XDG_DATA_HOME/shelf/plugins.<profile>.lock
 ```
 
 `source` verifies the lock context and selected files. It regenerates the lock
-when the configuration, profile, shell, or installed files changed.
+when the configuration, profile, shell, or installed files changed. Commands
+take a shared lock on the configuration directory while reading and an
+exclusive lock while writing, so concurrent shells wait instead of racing.
+Installed sources that are no longer configured are pruned by `lock`, by
+`update`, and by `source` when it relocks.
+
+Diagnostics go to stderr: `Loaded` and `Locked` headers, right-aligned
+`Checked` and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and
+`Removed` when `--verbose` is set. A failed command prints `error:` and exits
+with status 2.
 
 ## Examples
 
@@ -230,11 +262,10 @@ SHELF_PROFILE=work shelf source
 Use a temporary configuration:
 
 ```sh
-shelf --config-file /tmp/config.toml source
+shelf --config-file /tmp/plugins.toml source
 ```
 
 ## Status
 
 The repository contains focused tests for CLI path resolution, TOML
 configuration, source acquisition, lock handling, and shell rendering.
-Compatibility work continues against Sheldon’s upstream fixtures.

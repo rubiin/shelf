@@ -117,6 +117,38 @@ func TestSelectFilesMatchesNestedAndHiddenPaths(t *testing.T) {
 	}
 }
 
+func TestSelectFilesMatchesPatternsWithLeadingDotSlash(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "demo.zsh"), []byte("echo test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := selectFiles(directory, "demo", "zsh", []string{"./*.zsh"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(directory, "demo.zsh")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("got %v, want [%s]", got, want)
+	}
+}
+
+func TestCollectFilesReportsUnreadableDirectory(t *testing.T) {
+	if files, err := collectFiles(filepath.Join(t.TempDir(), "absent")); err != nil || files != nil {
+		t.Fatalf("missing directory = %v, err = %v, want no files and no error", files, err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	closed := filepath.Join(t.TempDir(), "closed")
+	if err := os.MkdirAll(closed, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collectFiles(closed); err == nil {
+		t.Fatal("an unreadable directory was treated as empty")
+	}
+}
+
 func TestSelectFilesSkipsDirectoriesNamedLikeMatches(t *testing.T) {
 	// Only files are sourceable, so a directory named like a pattern must not be selected.
 	directory := t.TempDir()

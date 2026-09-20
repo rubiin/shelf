@@ -28,6 +28,11 @@ apply = ["defer"]
 github = "MichaelAquilina/zsh-you-should-use"
 apply = ["defer"]
 
+# Clone a github or gist source over ssh or git instead of https:
+# [plugins.private]
+# github = "owner/plugin"
+# proto = "ssh"
+
 # Git reference examples:
 # [plugins.branch-example]
 # github = "owner/plugin"

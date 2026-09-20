@@ -48,12 +48,23 @@ func BenchmarkScriptDeferTemplateLoops(b *testing.B) {
 	}
 }
 
-func BenchmarkExpandTemplateExpressions(b *testing.B) {
+func BenchmarkTemplateExpressions(b *testing.B) {
 	data := PluginData{Name: "demo", Directory: "/plugins/demo", File: "/plugins/demo/demo.zsh"}
-	text := "source \"{{ file }}\"\nexport PATH={{ dir }}:$PATH\n# {{ name }} loaded"
+	text := "source \"{{ file }}\"\nexport PATH=\"{{ dir }}:$PATH\"\n# {{ name }} loaded"
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := expandTemplateExpressions(text, data); err != nil {
+		if _, err := Template("bench", text, data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTemplateConditionals(b *testing.B) {
+	data := PluginData{Name: "demo", Directory: "/plugins/demo", Files: []string{"/plugins/demo/a.zsh", "/plugins/demo/b.zsh"}, Hooks: map[string]string{"pre": "echo pre"}}
+	text := "{% if hooks.pre %}{{ hooks.pre | nl }}{% endif %}{% for file in files %}source \"{{ file }}\"\n{% endfor %}"
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := Template("bench", text, data); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"shelf/internal/config"
+	"shelf/internal/filelock"
 	"shelf/internal/lock"
 	"shelf/internal/render"
 	"shelf/internal/source"
@@ -46,9 +48,10 @@ type Context struct {
 
 func NewRoot() *cobra.Command {
 	command := &cobra.Command{
-		Use:          "shelf",
-		Short:        "Manage shell plugins",
-		SilenceUsage: true,
+		Use:           "shelf",
+		Short:         "Manage shell plugins",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 	command.SetOut(os.Stdout)
 	command.SetErr(os.Stderr)
@@ -75,7 +78,9 @@ func NewRoot() *cobra.Command {
 			if reinstall {
 				mode = lock.ModeReinstall
 			}
-			return lockConfig(mode, lockConcurrency, cmd.ErrOrStderr())
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				return lockConfig(paths, mode, lockConcurrency, cmd.ErrOrStderr())
+			})
 		},
 	}
 	lockCommand.Flags().BoolVar(&update, "update", false, "update plugin sources")
@@ -98,7 +103,11 @@ func NewRoot() *cobra.Command {
 			if sourceReinstall {
 				mode = lock.ModeReinstall
 			}
-			return sourceConfig(cmd.OutOrStdout(), relock || sourceUpdate || sourceReinstall, mode, sourceConcurrency)
+			paths, err := resolvePaths()
+			if err != nil {
+				return err
+			}
+			return sourceConfig(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), relock || sourceUpdate || sourceReinstall, mode, sourceConcurrency)
 		},
 	}
 	sourceCommand.Flags().BoolVar(&relock, "relock", false, "regenerate lock file")
@@ -114,10 +123,12 @@ func NewRoot() *cobra.Command {
 		Short: "Update plugin sources",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if updateLock {
-				return lockConfig(lock.ModeUpdate, updateConcurrency, cmd.ErrOrStderr())
-			}
-			return updateSources(cmd.OutOrStdout(), updateConcurrency)
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				if updateLock {
+					return lockConfig(paths, lock.ModeUpdate, updateConcurrency, cmd.ErrOrStderr())
+				}
+				return updateSources(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), updateConcurrency)
+			})
 		},
 	}
 	updateCommand.Flags().BoolVar(&updateLock, "lock", false, "write the refreshed lock file without shell output")
@@ -128,7 +139,11 @@ func NewRoot() *cobra.Command {
 		Short: "Print resolved Shelf paths",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return printPaths(cmd.OutOrStdout())
+			paths, err := resolvePaths()
+			if err != nil {
+				return err
+			}
+			return printPaths(paths, cmd.OutOrStdout())
 		},
 	})
 	command.AddCommand(&cobra.Command{
@@ -136,7 +151,9 @@ func NewRoot() *cobra.Command {
 		Short: "Check installed plugin status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return pluginStatus(cmd.OutOrStdout())
+			return withConfigLock(accessRead, func(paths Paths) error {
+				return pluginStatus(paths, cmd.OutOrStdout())
+			})
 		},
 	})
 	command.AddCommand(&cobra.Command{
@@ -144,7 +161,9 @@ func NewRoot() *cobra.Command {
 		Short: "Check Shelf configuration and installation",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return doctor(cmd.OutOrStdout())
+			return withConfigLock(accessRead, func(paths Paths) error {
+				return doctor(paths, cmd.OutOrStdout())
+			})
 		},
 	})
 	command.AddCommand(&cobra.Command{
@@ -152,7 +171,9 @@ func NewRoot() *cobra.Command {
 		Short: "Remove unconfigured installed plugins",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cleanPlugins(cmd.OutOrStdout())
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				return cleanPlugins(paths, cmd.OutOrStdout())
+			})
 		},
 	})
 	command.AddCommand(&cobra.Command{
@@ -160,11 +181,13 @@ func NewRoot() *cobra.Command {
 		Short: "List installed plugins",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return listPlugins(cmd.OutOrStdout())
+			return withConfigLock(accessRead, func(paths Paths) error {
+				return listPlugins(paths, cmd.OutOrStdout())
+			})
 		},
 	})
 	var addGitHub, addGit, addGist, addRemote, addLocal, addInline string
-	var addRev, addBranch, addTag, addProtocol, addDir, addFile string
+	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
 	var addUse, addApply, addProfiles []string
 	var addHooks map[string]string
 	addCommand := &cobra.Command{
@@ -172,11 +195,9 @@ func NewRoot() *cobra.Command {
 		Short: "Add a plugin to the configuration",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-			if err != nil {
-				return err
-			}
-			return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Protocol: addProtocol, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks})
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks})
+			})
 		},
 	}
 	addCommand.Flags().StringVar(&addGitHub, "github", "", "GitHub repository")
@@ -188,7 +209,9 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addRev, "rev", "", "Git revision")
 	addCommand.Flags().StringVar(&addBranch, "branch", "", "Git branch")
 	addCommand.Flags().StringVar(&addTag, "tag", "", "Git tag")
-	addCommand.Flags().StringVar(&addProtocol, "protocol", "", "Git protocol: https, git, or ssh")
+	addCommand.Flags().StringVar(&addProto, "proto", "", "Git protocol for github and gist sources: https, git, or ssh")
+	addCommand.Flags().StringVar(&addProtocol, "protocol", "", "deprecated alias of --proto")
+	_ = addCommand.Flags().MarkHidden("protocol")
 	addCommand.Flags().StringVar(&addDir, "dir", "", "plugin subdirectory")
 	addCommand.Flags().StringVar(&addFile, "file", "", "plugin file")
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
@@ -197,30 +220,30 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringToStringVar(&addHooks, "hooks", nil, "plugin hooks")
 	command.AddCommand(addCommand)
 
-	command.AddCommand(&cobra.Command{Use: "edit", Short: "Open the configuration in an editor", RunE: func(_ *cobra.Command, _ []string) error { return editConfig() }})
+	command.AddCommand(&cobra.Command{Use: "edit", Short: "Open the configuration in an editor", RunE: func(_ *cobra.Command, _ []string) error {
+		return withConfigLock(accessWrite, editConfig)
+	}})
 	var removeInteractive bool
 	removeCommand := &cobra.Command{
 		Use:   "remove [NAME]",
 		Short: "Remove a plugin from the configuration",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-			if err != nil {
-				return err
-			}
-			if removeInteractive {
-				if len(args) > 0 {
-					return fmt.Errorf("NAME cannot be combined with --interactive")
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				if removeInteractive {
+					if len(args) > 0 {
+						return fmt.Errorf("NAME cannot be combined with --interactive")
+					}
+					if nonInteractive {
+						return fmt.Errorf("remove --interactive cannot be used with --non-interactive")
+					}
+					return removeInteractiveConfig(cmd, paths)
 				}
-				if nonInteractive {
-					return fmt.Errorf("remove --interactive cannot be used with --non-interactive")
+				if len(args) == 0 {
+					return fmt.Errorf("accepts 1 arg(s), received 0")
 				}
-				return removeInteractiveConfig(cmd, paths)
-			}
-			if len(args) == 0 {
-				return fmt.Errorf("accepts 1 arg(s), received 0")
-			}
-			return config.Remove(paths.ConfigFile, args[0])
+				return config.Remove(paths.ConfigFile, args[0])
+			})
 		},
 	}
 	removeCommand.Flags().BoolVarP(&removeInteractive, "interactive", "i", false, "select plugins to remove interactively")
@@ -242,18 +265,16 @@ func NewRoot() *cobra.Command {
 		Use:   "init",
 		Short: "Create a new shell plugin configuration",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-			if err != nil {
-				return err
-			}
-			shell, err := configShell()
-			if err != nil {
-				return err
-			}
-			if initShell != "" {
-				shell = config.Shell(initShell)
-			}
-			return config.Initialize(paths.ConfigFile, shell)
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				shell, err := configShell()
+				if err != nil {
+					return err
+				}
+				if initShell != "" {
+					shell = config.Shell(initShell)
+				}
+				return config.Initialize(paths.ConfigFile, shell)
+			})
 		},
 	}
 	initCommand.Flags().StringVar(&initShell, "shell", "", "shell: bash or zsh")
@@ -269,11 +290,90 @@ func NewRoot() *cobra.Command {
 	return command
 }
 
-func lockConfig(mode lock.Mode, concurrency int, diagnostics io.Writer) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
+// resolvePaths returns the paths shared by every command.
+func resolvePaths() (Paths, error) {
+	return ResolvePaths(homeDir(), configDir, dataDir, configFile)
+}
+
+// access is the kind of config directory lock a command needs.
+type access int
+
+const (
+	accessRead access = iota
+	accessWrite
+)
+
+// withConfigLock resolves paths and holds the config directory lock while run executes.
+func withConfigLock(mode access, run func(Paths) error) error {
+	paths, err := resolvePaths()
 	if err != nil {
 		return err
 	}
+	guard, err := filelock.Acquire(paths.ConfigDirectory, mode == accessWrite, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = guard.Release() }()
+	return run(paths)
+}
+
+// firstNonEmpty prefers the documented flag value over a deprecated alias.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// sourceInputs holds the config-file derivations a source run needs.
+type sourceInputs struct {
+	Config  config.Config
+	Context lock.Context
+	Shell   string
+}
+
+// loadSourceInputs reads and validates the config, resolving the lock context and shell.
+func loadSourceInputs(paths Paths) (sourceInputs, error) {
+	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
+	if err != nil {
+		return sourceInputs{}, err
+	}
+	if err := config.Validate(cfg); err != nil {
+		return sourceInputs{}, err
+	}
+	shell, err := resolveShell(cfg)
+	if err != nil {
+		return sourceInputs{}, err
+	}
+	return sourceInputs{
+		Config:  cfg,
+		Context: lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)},
+		Shell:   string(shell),
+	}, nil
+}
+
+// renderScript writes the shell code for a verified lock file, reporting each plugin when verbose.
+func renderScript(output io.Writer, locked lock.LockedConfig, inputs sourceInputs, diagnostics io.Writer) error {
+	log := newLogger(diagnostics)
+	for _, plugin := range locked.Plugins {
+		if plugin.Inline != "" {
+			log.verboseStatus("Inlined", plugin.Name)
+			continue
+		}
+		log.verboseStatus("Rendered", plugin.Name)
+	}
+	// The lock records the resolved templates, so only the config's own templates are passed along.
+	script, err := render.Script(locked, inputs.Shell)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(output, script)
+	return err
+}
+
+func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Writer) error {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
@@ -281,28 +381,34 @@ func lockConfig(mode lock.Mode, concurrency int, diagnostics io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	colors := newColors(color, diagnostics)
-	if !quiet {
-		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
-		for _, name := range lock.PluginNames(cfg) {
-			_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(cfg.Plugins[name]))
+	log := newLogger(diagnostics)
+	log.header("Loaded", displayPath(paths.ConfigFile))
+	for _, name := range lock.PluginNames(cfg) {
+		plugin := cfg.Plugins[name]
+		if lock.Active(plugin.Profiles, profile) {
+			log.status("Checked", pluginSource(plugin))
+			continue
 		}
+		log.status("Skipped", pluginSource(plugin))
+	}
+	//  prunes installed sources that the config no longer owns before locking.
+	if err := cleanUnownedSources(paths.DataDirectory, cfg, log); err != nil {
+		return err
 	}
 	shell, err := resolveShell(cfg)
 	if err != nil {
 		return err
 	}
-	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
+	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)}
+	locked, err := lock.BuildWithConcurrency(context, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
+	lockPath := paths.LockFile(profile)
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	if !quiet {
-		_, _ = fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Locked"), displayPath(lockPath))
-	}
+	log.header("Locked", displayPath(lockPath))
 	return nil
 }
 
@@ -331,11 +437,7 @@ func displayPath(path string) string {
 	return path
 }
 
-func editConfig() error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
+func editConfig(paths Paths) error {
 	editor := envString("SHELF_EDITOR", envString("VISUAL", envString("EDITOR", "")))
 	if editor == "" {
 		return fmt.Errorf("no editor configured")
@@ -399,76 +501,70 @@ func splitEditorCommand(value string) ([]string, error) {
 	return arguments, nil
 }
 
-func sourceConfig(output io.Writer, force bool, mode lock.Mode, concurrency int) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
-	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
-	if err != nil {
-		return err
-	}
-	if err := config.Validate(cfg); err != nil {
-		return err
-	}
-	shell, err := resolveShell(cfg)
-	if err != nil {
-		return err
-	}
-	lockContext := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}
-	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
-	var locked lock.LockedConfig
+// sourceConfig prints shell code, reading a fresh lock file under a shared lock and only taking
+// the exclusive lock when it has to relock.
+func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode lock.Mode, concurrency int) error {
+	lockPath := paths.LockFile(profile)
+	log := newLogger(diagnostics)
 	if !force {
-		locked, err = lock.Read(lockPath)
-		if err == nil && !lock.VerifyLocked(locked, lockContext) {
-			err = os.ErrNotExist
-		}
-	}
-	if force || err != nil {
-		locked, err = lock.BuildWithConcurrency(lockContext, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
+		guard, err := filelock.Acquire(paths.ConfigDirectory, false, diagnostics)
 		if err != nil {
 			return err
 		}
-		if err := lock.Write(lockPath, locked); err != nil {
+		inputs, err := loadSourceInputs(paths)
+		if err != nil {
+			_ = guard.Release()
 			return err
 		}
-	} else if err := lock.Restore(cfg, source.NewInstaller(paths.DataDirectory), locked, concurrency); err != nil {
-		return err
+		locked, readErr := lock.Read(lockPath)
+		if readErr == nil && lock.VerifyLocked(locked, inputs.Context) {
+			defer func() { _ = guard.Release() }()
+			log.verboseHeader("Unlocked", displayPath(lockPath))
+			if err := lock.Restore(inputs.Config, source.NewInstaller(paths.DataDirectory), locked, concurrency); err != nil {
+				return err
+			}
+			return renderScript(output, locked, inputs, diagnostics)
+		}
+		if err := guard.Release(); err != nil {
+			return err
+		}
 	}
-	script, err := render.Script(locked, string(shell), cfg.Templates)
+	guard, err := filelock.Acquire(paths.ConfigDirectory, true, diagnostics)
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(output, script)
-	return err
+	defer func() { _ = guard.Release() }()
+	// Another process may have edited the config or relocked while we waited for the lock.
+	inputs, err := loadSourceInputs(paths)
+	if err != nil {
+		return err
+	}
+	if err := cleanUnownedSources(paths.DataDirectory, inputs.Config, log); err != nil {
+		return err
+	}
+	locked, err := lock.BuildWithConcurrency(inputs.Context, inputs.Config, source.NewInstaller(paths.DataDirectory), mode, concurrency)
+	if err != nil {
+		return err
+	}
+	if err := lock.Write(lockPath, locked); err != nil {
+		return err
+	}
+	return renderScript(output, locked, inputs, diagnostics)
 }
 
-func updateSources(output io.Writer, concurrency int) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
+func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) error {
+	inputs, err := loadSourceInputs(paths)
 	if err != nil {
 		return err
 	}
-	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
+	if err := cleanUnownedSources(paths.DataDirectory, inputs.Config, newLogger(diagnostics)); err != nil {
+		return err
+	}
+	locked, err := lock.BuildWithConcurrency(inputs.Context, inputs.Config, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
 	if err != nil {
 		return err
 	}
-	if err := config.Validate(cfg); err != nil {
-		return err
-	}
-	shell, err := resolveShell(cfg)
-	if err != nil {
-		return err
-	}
-	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
-	if err != nil {
-		return err
-	}
-	script, err := render.Script(locked, string(shell), cfg.Templates)
-	if err != nil {
-		return err
-	}
-	_, err = io.WriteString(output, script)
-	return err
+	return renderScript(output, locked, inputs, diagnostics)
 }
 
 // interactiveSelect is the picker behind remove --interactive; a variable so tests can script it.
@@ -510,16 +606,13 @@ func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
 	return nil
 }
 
-func listPlugins(output io.Writer) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
+func listPlugins(paths Paths, output io.Writer) error {
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
-	for _, name := range cfg.PluginOrder {
+	// PluginNames also reports plugins declared with dotted keys, which PluginOrder misses.
+	for _, name := range lock.PluginNames(cfg) {
 		if _, err := fmt.Fprintln(output, name); err != nil {
 			return err
 		}
@@ -527,11 +620,7 @@ func listPlugins(output io.Writer) error {
 	return nil
 }
 
-func printPaths(output io.Writer) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
+func printPaths(paths Paths, output io.Writer) error {
 	for _, entry := range []struct {
 		name string
 		path string
@@ -539,7 +628,7 @@ func printPaths(output io.Writer) error {
 		{"config_dir", paths.ConfigDirectory},
 		{"data_dir", paths.DataDirectory},
 		{"config_file", paths.ConfigFile},
-		{"lock_file", filepath.Join(paths.ConfigDirectory, "plugins.lock")},
+		{"lock_file", paths.LockFile(profile)},
 	} {
 		if _, err := fmt.Fprintf(output, "%s=%s\n", entry.name, entry.path); err != nil {
 			return err
@@ -548,11 +637,7 @@ func printPaths(output io.Writer) error {
 	return nil
 }
 
-func pluginStatus(output io.Writer) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
+func pluginStatus(paths Paths, output io.Writer) error {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
@@ -564,7 +649,7 @@ func pluginStatus(output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
+	lockPath := paths.LockFile(profile)
 	valid, err := lock.Verify(lockPath, lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
 	if err != nil {
 		return err
@@ -600,11 +685,7 @@ func pluginStatus(output io.Writer) error {
 	return nil
 }
 
-func doctor(output io.Writer) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
+func doctor(paths Paths, output io.Writer) error {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
@@ -627,7 +708,7 @@ func doctor(output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	valid, err := lock.Verify(filepath.Join(paths.ConfigDirectory, "plugins.lock"), lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
+	valid, err := lock.Verify(paths.LockFile(profile), lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
 	if err != nil {
 		return err
 	}
@@ -647,11 +728,7 @@ func usesGit(cfg config.Config) bool {
 	return false
 }
 
-func cleanPlugins(output io.Writer) error {
-	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
-	if err != nil {
-		return err
-	}
+func cleanPlugins(paths Paths, output io.Writer) error {
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
 		return err
@@ -659,29 +736,130 @@ func cleanPlugins(output io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	pluginsDir := filepath.Join(paths.DataDirectory, "plugins")
-	entries, err := os.ReadDir(pluginsDir)
-	if os.IsNotExist(err) {
-		return nil
-	}
+	removed, err := cleanInstallDirectories(paths.DataDirectory, cfg)
 	if err != nil {
 		return err
 	}
-	for _, entry := range entries {
-		if _, configured := cfg.Plugins[entry.Name()]; !entry.IsDir() || configured {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(pluginsDir, entry.Name())); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(output, "removed: %s\n", entry.Name()); err != nil {
+	for _, path := range removed {
+		if _, err := fmt.Fprintf(output, "removed: %s\n", installDisplayPath(paths.DataDirectory, path)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// loadConfigWithFingerprint reads config.toml once and returns it with its lock fingerprint.
+// cleanUnownedSources prunes installed sources the config no longer owns, before locking.
+func cleanUnownedSources(dataDirectory string, cfg config.Config, log logger) error {
+	removed, err := cleanInstallDirectories(dataDirectory, cfg)
+	if err != nil {
+		return err
+	}
+	for _, path := range removed {
+		log.verboseWarning("Removed", installDisplayPath(dataDirectory, path))
+	}
+	return nil
+}
+
+// cleanInstallDirectories removes install paths the config no longer owns and names what it removed.
+func cleanInstallDirectories(dataDirectory string, cfg config.Config) ([]string, error) {
+	kept, sources, err := ownedInstallPaths(dataDirectory, cfg)
+	if err != nil {
+		return nil, err
+	}
+	// Inline plugins live in the lock, so nothing owns the plugins directory any more.
+	roots := []string{source.CloneDir(dataDirectory), source.DownloadDir(dataDirectory), filepath.Join(dataDirectory, "plugins")}
+	var removed []string
+	for _, root := range roots {
+		paths, err := removeUnownedPaths(root, kept, sources)
+		removed = append(removed, paths...)
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// ownedInstallPaths collects the paths the config owns plus the source directories not to walk into.
+func ownedInstallPaths(dataDirectory string, cfg config.Config) (map[string]bool, map[string]bool, error) {
+	kept := map[string]bool{}
+	sources := map[string]bool{}
+	for _, root := range []string{source.CloneDir(dataDirectory), source.DownloadDir(dataDirectory)} {
+		kept[root] = true
+	}
+	for _, plugin := range cfg.Plugins {
+		switch {
+		case plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "":
+			directory, err := source.GitDirectory(dataDirectory, source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto, Ref: plugin.Rev, Branch: plugin.Branch, Tag: plugin.Tag, Dir: plugin.Dir})
+			if err != nil {
+				return nil, nil, err
+			}
+			sources[directory] = true
+			keepAncestors(kept, directory)
+		case plugin.Remote != "":
+			directory, file, err := source.RemoteDirectory(dataDirectory, plugin.Remote)
+			if err != nil {
+				return nil, nil, err
+			}
+			kept[file] = true
+			keepAncestors(kept, directory)
+		}
+	}
+	return kept, sources, nil
+}
+
+// keepAncestors marks a path and every parent directory as owned.
+func keepAncestors(kept map[string]bool, path string) {
+	for path != "" {
+		kept[path] = true
+		parent := filepath.Dir(path)
+		if parent == path {
+			return
+		}
+		path = parent
+	}
+}
+
+// removeUnownedPaths deletes everything under root that the config does not own.
+func removeUnownedPaths(root string, kept, sources map[string]bool) ([]string, error) {
+	var removed []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		if kept[path] {
+			if entry.IsDir() && sources[path] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		removed = append(removed, path)
+		if entry.IsDir() {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	return removed, err
+}
+
+// installDisplayPath names an install path relative to the data directory.
+func installDisplayPath(dataDirectory, path string) string {
+	relative, err := filepath.Rel(dataDirectory, path)
+	if err != nil {
+		return path
+	}
+	return relative
+}
+
+// loadConfigWithFingerprint reads the config once and returns it with its lock fingerprint.
 func loadConfigWithFingerprint(path string) (config.Config, string, error) {
 	cfg, contents, err := config.LoadWithContents(path)
 	if err != nil {
@@ -717,7 +895,16 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 	command.SetArgs(args)
 	command.SetOut(stdout)
 	command.SetErr(stderr)
-	return command.Execute()
+	err := command.Execute()
+	if err != nil {
+		writeError(stderr, err)
+	}
+	return err
+}
+
+// writeError prints a failure as a blank line followed by an error prefix.
+func writeError(diagnostics io.Writer, err error) {
+	_, _ = fmt.Fprintf(diagnostics, "\n%s %s\n", colors{enabled: colorEnabled(color, isTerminal(diagnostics))}.error("error:"), err)
 }
 
 // RuntimeContext reports settings to non-Cobra callers, delegating paths to ResolvePaths.

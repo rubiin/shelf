@@ -14,7 +14,7 @@ func Load(path string) (Config, error) {
 	return cfg, err
 }
 
-// LoadWithContents also returns the bytes it read, so callers need not read config.toml twice.
+// LoadWithContents also returns the bytes it read, so callers need not read the config twice.
 func LoadWithContents(path string) (Config, []byte, error) {
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -43,6 +43,14 @@ func decode(contents []byte) (Config, error) {
 			}
 		}
 	}
+
+	for name, plugin := range cfg.Plugins {
+		if plugin.Proto == "" && plugin.Protocol != "" {
+			plugin.Proto = plugin.Protocol
+		}
+		plugin.Protocol = ""
+		cfg.Plugins[name] = plugin
+	}
 	return cfg, nil
 }
 
@@ -68,6 +76,52 @@ func Validate(cfg Config) error {
 			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 				return fmt.Errorf("plugin %q has invalid remote URL", name)
 			}
+		}
+		if plugin.Proto != "" {
+			switch plugin.Proto {
+			case "git", "https", "ssh":
+			default:
+				return fmt.Errorf("plugin %q proto %q must be git, https, or ssh", name, plugin.Proto)
+			}
+			if plugin.GitHub == "" && plugin.Gist == "" {
+				return fmt.Errorf("plugin %q can only set proto for github or gist sources", name)
+			}
+		}
+		if plugin.Inline != "" {
+			if err := validateInlinePlugin(name, plugin); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateInlinePlugin rejects the fields an inline plugin cannot use.
+func validateInlinePlugin(name string, plugin RawPlugin) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"proto", plugin.Proto},
+		{"rev", plugin.Rev},
+		{"branch", plugin.Branch},
+		{"tag", plugin.Tag},
+		{"dir", plugin.Dir},
+		{"file", plugin.File},
+	} {
+		if field.value != "" {
+			return fmt.Errorf("plugin %q cannot set %s for an inline plugin", name, field.name)
+		}
+	}
+	for _, field := range []struct {
+		name  string
+		count int
+	}{
+		{"use", len(plugin.Use)},
+		{"apply", len(plugin.Apply)},
+	} {
+		if field.count > 0 {
+			return fmt.Errorf("plugin %q cannot set %s for an inline plugin", name, field.name)
 		}
 	}
 	return nil

@@ -9,12 +9,11 @@ import (
 	"strings"
 )
 
-func installGit(ctx context.Context, dataDir string, request Request) (Installed, error) {
+func installGit(ctx context.Context, directory string, request Request) (Installed, error) {
 	repositoryURL := gitURL(request)
 	if request.Git == "" && request.GitHub == "" && request.Gist == "" {
 		return Installed{}, fmt.Errorf("git source is empty")
 	}
-	directory := pluginDir(dataDir, request.Name)
 	if request.Reinstall {
 		if err := os.RemoveAll(directory); err != nil {
 			return Installed{}, err
