@@ -110,8 +110,12 @@ go vet ./...
 
 ```text
 shelf init
-shelf lock [--update | --reinstall]
-shelf source [--relock | --update | --reinstall]
+shelf lock [--update | --reinstall] [--concurrency N]
+shelf source [--relock | --update | --reinstall] [--concurrency N]
+shelf path
+shelf status
+shelf doctor
+shelf clean
 shelf list
 shelf add NAME ...
 shelf edit
@@ -119,6 +123,9 @@ shelf remove NAME
 shelf completions SHELL
 shelf version
 ```
+
+`lock` and `source` install plugins concurrently by default, with up to eight
+installs in flight. Use `--concurrency N` to set a different positive limit.
 
 Global options:
 

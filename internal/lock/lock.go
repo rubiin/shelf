@@ -9,61 +9,127 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 	"shelf/internal/config"
 	"shelf/internal/source"
 )
 
+const DefaultConcurrency = 8
+
 func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode) (LockedConfig, error) {
+	return BuildWithConcurrency(ctx, cfg, installer, mode, DefaultConcurrency)
+}
+
+func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Installer, mode Mode, concurrency int) (LockedConfig, error) {
+	if concurrency < 1 {
+		return LockedConfig{}, fmt.Errorf("concurrency must be at least 1")
+	}
 	locked := LockedConfig{ConfigFingerprint: fingerprint(ctx.ConfigFile), Profile: ctx.Profile, Shell: ctx.Shell}
+	type task struct {
+		name   string
+		plugin config.RawPlugin
+	}
+	var tasks []task
 	for _, name := range pluginNames(cfg) {
 		plugin := cfg.Plugins[name]
 		if !active(plugin.Profiles, ctx.Profile) {
 			continue
 		}
-		installed, err := installer.Install(context.Background(), source.Request{
-			Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Protocol: plugin.Protocol, Remote: plugin.Remote,
-			Local: plugin.Local, Inline: plugin.Inline, Ref: plugin.Rev, Branch: plugin.Branch,
-			Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
-		})
-		if err != nil {
-			return LockedConfig{}, fmt.Errorf("install plugin %q: %w", name, err)
-		}
-		var files []string
-		if plugin.File != "" {
-			file := filepath.Join(installed.Directory, plugin.File)
-			if _, err := os.Stat(file); err != nil {
-				return LockedConfig{}, fmt.Errorf("select plugin %q file %q: %w", name, plugin.File, err)
-			}
-			files = []string{file}
-		} else if installed.File != "" {
-			files = []string{installed.File}
-		} else {
-			patterns := plugin.Use
-			firstMatch := len(patterns) > 0
-			if len(patterns) == 0 {
-				patterns = cfg.Matches
-				if len(patterns) == 0 {
-					patterns = defaultMatches(ctx.Shell)
-				}
-				firstMatch = true
-			}
-			files, err = selectFiles(installed.Directory, name, ctx.Shell, patterns, firstMatch)
-			if err != nil {
-				return LockedConfig{}, fmt.Errorf("select plugin %q files: %w", name, err)
-			}
-		}
-		apply := plugin.Apply
-		if len(apply) == 0 {
-			apply = cfg.Apply
-		}
-		if len(apply) == 0 {
-			apply = []string{"source"}
-		}
-		locked.Plugins = append(locked.Plugins, LockedPlugin{Name: name, Source: pluginSource(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks})
+		tasks = append(tasks, task{name: name, plugin: plugin})
 	}
+	plugins := make([]LockedPlugin, len(tasks))
+	installContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := make(chan int)
+	workers := min(concurrency, len(tasks))
+	var waitGroup sync.WaitGroup
+	var once sync.Once
+	var buildErr error
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for {
+				select {
+				case <-installContext.Done():
+					return
+				case index, open := <-jobs:
+					if !open {
+						return
+					}
+					plugin, err := buildPlugin(installContext, ctx, cfg, installer, mode, tasks[index].name, tasks[index].plugin)
+					if err != nil {
+						once.Do(func() {
+							buildErr = err
+							cancel()
+						})
+						return
+					}
+					plugins[index] = plugin
+				}
+			}
+		}()
+	}
+dispatch:
+	for index := range tasks {
+		select {
+		case <-installContext.Done():
+			break dispatch
+		case jobs <- index:
+		}
+	}
+	close(jobs)
+	waitGroup.Wait()
+	if buildErr != nil {
+		return LockedConfig{}, buildErr
+	}
+	locked.Plugins = plugins
 	return locked, nil
+}
+
+func buildPlugin(installContext context.Context, ctx Context, cfg config.Config, installer source.Installer, mode Mode, name string, plugin config.RawPlugin) (LockedPlugin, error) {
+	installed, err := installer.Install(installContext, source.Request{
+		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Protocol: plugin.Protocol, Remote: plugin.Remote,
+		Local: plugin.Local, Inline: plugin.Inline, Ref: plugin.Rev, Branch: plugin.Branch,
+		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
+	})
+	if err != nil {
+		return LockedPlugin{}, fmt.Errorf("install plugin %q: %w", name, err)
+	}
+	var files []string
+	if plugin.File != "" {
+		file := filepath.Join(installed.Directory, plugin.File)
+		if _, err := os.Stat(file); err != nil {
+			return LockedPlugin{}, fmt.Errorf("select plugin %q file %q: %w", name, plugin.File, err)
+		}
+		files = []string{file}
+	} else if installed.File != "" {
+		files = []string{installed.File}
+	} else {
+		patterns := plugin.Use
+		firstMatch := len(patterns) > 0
+		if len(patterns) == 0 {
+			patterns = cfg.Matches
+			if len(patterns) == 0 {
+				patterns = defaultMatches(ctx.Shell)
+			}
+			firstMatch = true
+		}
+		files, err = selectFiles(installed.Directory, name, ctx.Shell, patterns, firstMatch)
+		if err != nil {
+			return LockedPlugin{}, fmt.Errorf("select plugin %q files: %w", name, err)
+		}
+	}
+	apply := plugin.Apply
+	if len(apply) == 0 {
+		apply = cfg.Apply
+	}
+	if len(apply) == 0 {
+		apply = []string{"source"}
+	}
+	return LockedPlugin{Name: name, Source: pluginSource(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks}, nil
 }
 
 func Restore(cfg config.Config, installer source.Installer, locked LockedConfig) error {
