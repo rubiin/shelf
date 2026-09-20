@@ -112,6 +112,7 @@ go vet ./...
 shelf init
 shelf lock [--update | --reinstall] [--concurrency N]
 shelf source [--relock | --update | --reinstall] [--concurrency N]
+shelf update [--lock] [--concurrency N]
 shelf path
 shelf status
 shelf doctor
@@ -194,7 +195,13 @@ when the configuration, profile, shell, or installed files changed.
 Update plugin sources:
 
 ```sh
-shelf lock --update
+shelf update
+```
+
+Update plugin sources and write the refreshed lockfile without printing shell code:
+
+```sh
+shelf update --lock
 ```
 
 Reinstall all sources:

@@ -25,7 +25,7 @@ func TestRootCommands(t *testing.T) {
 	for _, command := range root.Commands() {
 		commands[command.Name()] = true
 	}
-	for _, name := range []string{"init", "lock", "source", "path", "status", "doctor", "clean", "list", "add", "edit", "remove", "completions", "version"} {
+	for _, name := range []string{"init", "lock", "source", "update", "path", "status", "doctor", "clean", "list", "add", "edit", "remove", "completions", "version"} {
 		if !commands[name] {
 			t.Errorf("root command %q is missing", name)
 		}
@@ -43,7 +43,7 @@ func TestRootCommands(t *testing.T) {
 			t.Errorf("add flag %q is missing", name)
 		}
 	}
-	for _, name := range []string{"lock", "source"} {
+	for _, name := range []string{"lock", "source", "update"} {
 		command, _, err := root.Find([]string{name})
 		if err != nil {
 			t.Fatal(err)

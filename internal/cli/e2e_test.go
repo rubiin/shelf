@@ -30,6 +30,58 @@ func TestInlineLockAndSource(t *testing.T) {
 	}
 }
 
+func TestUpdateEmitsSourceWithoutWritingLockfile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo updated\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"update"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "echo updated") {
+		t.Fatalf("update output = %q", output.String())
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); !os.IsNotExist(err) {
+		t.Fatalf("update wrote lock file: %v", err)
+	}
+}
+
+func TestUpdateLockWritesLockfileWithoutSource(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo updated\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"update", "--lock"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("update --lock output = %q", output.String())
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); err != nil {
+		t.Fatalf("update --lock did not write lock file: %v", err)
+	}
+}
+
 func TestPathPrintsResolvedPaths(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

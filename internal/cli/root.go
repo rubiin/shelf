@@ -102,6 +102,22 @@ func NewRoot() *cobra.Command {
 	sourceCommand.Flags().IntVar(&sourceConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
 	sourceCommand.MarkFlagsMutuallyExclusive("update", "reinstall")
 	command.AddCommand(sourceCommand)
+	var updateLock bool
+	var updateConcurrency int
+	updateCommand := &cobra.Command{
+		Use:   "update",
+		Short: "Update plugin sources",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if updateLock {
+				return lockConfig(lock.ModeUpdate, updateConcurrency, cmd.ErrOrStderr())
+			}
+			return updateSources(cmd.OutOrStdout(), updateConcurrency)
+		},
+	}
+	updateCommand.Flags().BoolVar(&updateLock, "lock", false, "write the refreshed lock file without shell output")
+	updateCommand.Flags().IntVar(&updateConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
+	command.AddCommand(updateCommand)
 	command.AddCommand(&cobra.Command{
 		Use:   "path",
 		Short: "Print resolved Shelf paths",
@@ -342,6 +358,34 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode, concurrency int)
 			return err
 		}
 	} else if err := lock.Restore(cfg, source.NewInstaller(paths.DataDirectory), locked); err != nil {
+		return err
+	}
+	script, err := render.Script(locked, string(shell), cfg.Templates)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(output, script)
+	return err
+}
+
+func updateSources(output io.Writer, concurrency int) error {
+	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(paths.ConfigFile)
+	if err != nil {
+		return err
+	}
+	if err := config.Validate(cfg); err != nil {
+		return err
+	}
+	shell := cfg.Shell
+	if shell == "" {
+		shell = configShell()
+	}
+	locked, err := lock.BuildWithConcurrency(lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}, cfg, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
+	if err != nil {
 		return err
 	}
 	script, err := render.Script(locked, string(shell), cfg.Templates)
