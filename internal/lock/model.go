@@ -24,6 +24,8 @@ type LockedConfig struct {
 
 type LockedPlugin struct {
 	Name      string            `toml:"name"`
+	Source    string            `toml:"source,omitempty"`
+	Rev       string            `toml:"rev,omitempty"`
 	Directory string            `toml:"directory"`
 	Files     []string          `toml:"files"`
 	Apply     []string          `toml:"apply"`

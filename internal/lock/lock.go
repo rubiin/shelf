@@ -61,9 +61,45 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 		if len(apply) == 0 {
 			apply = []string{"source"}
 		}
-		locked.Plugins = append(locked.Plugins, LockedPlugin{Name: name, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks})
+		locked.Plugins = append(locked.Plugins, LockedPlugin{Name: name, Source: pluginSource(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks})
 	}
 	return locked, nil
+}
+
+func Restore(cfg config.Config, installer source.Installer, locked LockedConfig) error {
+	for _, plugin := range locked.Plugins {
+		if plugin.Rev == "" {
+			continue
+		}
+		configured, exists := cfg.Plugins[plugin.Name]
+		if !exists || !isGit(configured) {
+			continue
+		}
+		if _, err := installer.Install(context.Background(), source.Request{
+			Name: plugin.Name, Git: configured.Git, GitHub: configured.GitHub, Gist: configured.Gist, Protocol: configured.Protocol,
+			Ref: plugin.Rev, Dir: configured.Dir,
+		}); err != nil {
+			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
+		}
+	}
+	return nil
+}
+
+func pluginSource(plugin config.RawPlugin) string {
+	switch {
+	case plugin.GitHub != "":
+		return "github:" + plugin.GitHub
+	case plugin.Gist != "":
+		return "gist:" + plugin.Gist
+	case plugin.Git != "":
+		return "git:" + plugin.Git
+	default:
+		return ""
+	}
+}
+
+func isGit(plugin config.RawPlugin) bool {
+	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != ""
 }
 
 func pluginNames(cfg config.Config) []string {

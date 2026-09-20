@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,6 +53,75 @@ func TestLockStoresLockfileInConfigDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "plugins.lock")); err == nil {
 		t.Fatal("lock file was written under the data directory")
 	}
+}
+
+func TestSourceRestoresLockedGitRevision(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commit := gitCommit(t, repository, "plugin.zsh", "echo first\n")
+	_ = gitCommit(t, repository, "plugin.zsh", "echo second\n")
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.test]\ngit = \"" + repository + "\"\nrev = \"" + commit + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(directory, "data", "plugins", "test")
+	if err := exec.Command("git", "-C", checkout, "checkout", "--detach", "HEAD").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("git", "-C", checkout, "checkout", "--detach", "master").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Execute([]string{"source"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(checkout, "plugin.zsh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo first\n" {
+		t.Fatalf("checked out plugin = %q", contents)
+	}
+}
+
+func gitCommit(t *testing.T, directory, file, contents string) string {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(directory, ".git")); os.IsNotExist(err) {
+		for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Shelf Tests"}} {
+			if output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, output)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(directory, file), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", file}, {"commit", "-m", contents}} {
+		if output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	output, err := exec.Command("git", "-C", directory, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestLockReportsProgressOnStderr(t *testing.T) {

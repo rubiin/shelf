@@ -296,6 +296,8 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode) error {
 		if err := lock.Write(lockPath, locked); err != nil {
 			return err
 		}
+	} else if err := lock.Restore(cfg, source.NewInstaller(paths.DataDirectory), locked); err != nil {
+		return err
 	}
 	script, err := render.Script(locked, string(shell), cfg.Templates)
 	if err != nil {

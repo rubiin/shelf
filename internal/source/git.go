@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func installGit(ctx context.Context, dataDir string, request Request) (Installed, error) {
@@ -44,7 +45,11 @@ func installGit(ctx context.Context, dataDir string, request Request) (Installed
 			return Installed{}, err
 		}
 	}
-	return Installed{Directory: sourceDirectory(directory, request.Dir)}, nil
+	revision, err := gitOutputIn(ctx, directory, "rev-parse", "HEAD")
+	if err != nil {
+		return Installed{}, err
+	}
+	return Installed{Directory: sourceDirectory(directory, request.Dir), Revision: strings.TrimSpace(revision)}, nil
 }
 
 func runGit(ctx context.Context, args ...string) error {
@@ -58,4 +63,14 @@ func runGit(ctx context.Context, args ...string) error {
 func runGitIn(ctx context.Context, directory string, args ...string) error {
 	commandArgs := append([]string{"-C", directory}, args...)
 	return runGit(ctx, commandArgs...)
+}
+
+func gitOutputIn(ctx context.Context, directory string, args ...string) (string, error) {
+	commandArgs := append([]string{"-C", directory}, args...)
+	command := exec.CommandContext(ctx, "git", commandArgs...)
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %v: %w", args, err)
+	}
+	return string(output), nil
 }

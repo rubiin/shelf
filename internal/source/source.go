@@ -49,6 +49,7 @@ func gitURL(request Request) string {
 type Installed struct {
 	Directory string
 	File      string
+	Revision  string
 }
 
 type Installer interface {
