@@ -1,14 +1,18 @@
-# shelf
+<p align="center">
+  <img src="./logo.png" width="200" alt="Shelf" />
+</p>
+<h1 align="center">Shelf</h1>
+<p align="center">
+  <em>Fast, configurable shell plugin manager written in Go.</em>
+</p>
 
-Fast, configurable shell plugin manager written in Go.
+<p align="center">
+  <a href="https://github.com/rubiin/shelf/blob/master/LICENSE"><img alt="License" src="https://img.shields.io/github/license/rubiin/shelf" /></a>
+  <a href="https://github.com/rubiin/shelf/actions"><img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/rubiin/shelf/ci.yml"></a>
+  <a href="https://aur.archlinux.org/packages/shelf-sh-bin"><img alt="AUR Version" src="https://img.shields.io/aur/version/shelf-sh-bin"></a>
 
-[![CI](https://github.com/rubiin/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/rubiin/shelf/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/rubiin/shelf)](https://github.com/rubiin/shelf/releases/latest)
-[![AUR package](https://img.shields.io/aur/version/shelf-sh-bin)](https://aur.archlinux.org/packages/shelf-sh-bin)
-[![License](https://img.shields.io/github/license/rubiin/shelf)](https://github.com/rubiin/shelf/blob/master/LICENSE)
 
-Shelf follows Sheldon’s configuration model while using a different binary,
-environment prefix, and default directory name.
+</p>
 
 ## Features
 
