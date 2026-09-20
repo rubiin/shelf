@@ -2,6 +2,11 @@
 
 Fast, configurable shell plugin manager written in Go.
 
+[![CI](https://github.com/rubiin/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/rubiin/shelf/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/rubiin/shelf)](https://github.com/rubiin/shelf/releases/latest)
+[![AUR package](https://img.shields.io/aur/version/shelf-sh-bin)](https://aur.archlinux.org/packages/shelf-sh-bin)
+[![License](https://img.shields.io/github/license/rubiin/shelf)](https://github.com/rubiin/shelf/blob/master/LICENSE)
+
 Shelf follows Sheldon’s configuration model while using a different binary,
 environment prefix, and default directory name.
 
@@ -14,6 +19,42 @@ environment prefix, and default directory name.
 - Profiles, hooks, custom apply templates, and lock files.
 - TOML configuration.
 - Cobra-generated shell completions.
+
+## Installation
+
+### Arch Linux
+
+Install the packaged binary from the AUR:
+
+```sh
+yay -S shelf-sh-bin
+```
+
+The package also installs Bash, Zsh, and Fish completion files.
+
+### Linux packages
+
+Release builds include packages for Debian-based, RPM-based, and Alpine Linux
+systems. Download the matching `.deb`, `.rpm`, or `.apk` file from the
+[latest release](https://github.com/rubiin/shelf/releases/latest), then install
+it with your distribution's package manager.
+
+### Prebuilt archives
+
+Linux and macOS tarballs are available on the [releases
+page](https://github.com/rubiin/shelf/releases). Extract the archive and place
+the `shelf` binary somewhere on your `PATH`.
+
+### Build from source
+
+Install Go 1.23 or newer, then build the binary locally:
+
+```sh
+git clone https://github.com/rubiin/shelf.git
+cd shelf
+go build -o shelf ./cmd/shelf
+install -Dm755 shelf "$HOME/.local/bin/shelf"
+```
 
 ## Differences from Sheldon
 
