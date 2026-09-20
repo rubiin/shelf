@@ -423,21 +423,22 @@ func updateSources(output io.Writer, concurrency int) error {
 // interactiveSelect is the picker behind remove --interactive. It is a
 // package-level variable so tests can script the selection.
 var interactiveSelect = func(options []string, out io.Writer) ([]string, error) {
-	return tui.Select(options, tui.IO{In: os.Stdin, Out: out, MakeRaw: term.MakeRaw, Restore: term.Restore})
+	return tui.Select(options, tui.IO{In: os.Stdin, Out: out, MakeRaw: term.MakeRaw, Restore: term.Restore, Color: colorEnabled(color, true)})
 }
 
 func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
-	locked, err := lock.Read(filepath.Join(paths.ConfigDirectory, "plugins.lock"))
+	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
-		return fmt.Errorf("read lock file: %w", err)
+		return err
 	}
-	if len(locked.Plugins) == 0 {
-		return fmt.Errorf("no plugins installed")
+	if err := config.Validate(cfg); err != nil {
+		return err
 	}
-	names := make([]string, 0, len(locked.Plugins))
-	for _, plugin := range locked.Plugins {
-		names = append(names, plugin.Name)
+	if len(cfg.Plugins) == 0 {
+		return fmt.Errorf("no plugins configured")
 	}
+	names := make([]string, 0, len(cfg.PluginOrder))
+	names = append(names, cfg.PluginOrder...)
 	out := cmd.OutOrStdout()
 	selection, err := interactiveSelect(names, out)
 	if errors.Is(err, tui.ErrCancelled) {
@@ -464,12 +465,12 @@ func listPlugins(output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	locked, err := lock.Read(filepath.Join(paths.ConfigDirectory, "plugins.lock"))
+	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
-	for _, plugin := range locked.Plugins {
-		if _, err := fmt.Fprintln(output, plugin.Name); err != nil {
+	for _, name := range cfg.PluginOrder {
+		if _, err := fmt.Fprintln(output, name); err != nil {
 			return err
 		}
 	}

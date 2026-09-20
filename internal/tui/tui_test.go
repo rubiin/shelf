@@ -24,15 +24,17 @@ func (f *fakeTerminal) Restore(int, *term.State) error {
 	return nil
 }
 
-func runSelect(keys string, choices []string) ([]string, *fakeTerminal, string, error) {
+func runSelect(t *testing.T, keys string, choices []string) ([]string, *fakeTerminal, string, error) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
 	terminal := &fakeTerminal{}
 	var output bytes.Buffer
-	selected, err := Select(choices, IO{In: strings.NewReader(keys), Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore})
+	selected, err := Select(choices, IO{In: strings.NewReader(keys), Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore, Color: true})
 	return selected, terminal, output.String(), err
 }
 
 func TestSelectTogglesAndConfirms(t *testing.T) {
-	selected, terminal, _, err := runSelect("\x1b[B \r", []string{"alpha", "beta", "gamma"})
+	selected, terminal, _, err := runSelect(t, "\x1b[B \r", []string{"alpha", "beta", "gamma"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +47,7 @@ func TestSelectTogglesAndConfirms(t *testing.T) {
 }
 
 func TestSelectSpaceTogglesFirst(t *testing.T) {
-	selected, _, _, err := runSelect(" \r", []string{"alpha", "beta"})
+	selected, _, _, err := runSelect(t, " \r", []string{"alpha", "beta"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,14 +57,14 @@ func TestSelectSpaceTogglesFirst(t *testing.T) {
 }
 
 func TestSelectAllTogglesEverything(t *testing.T) {
-	selected, _, _, err := runSelect("a\r", []string{"alpha", "beta", "gamma"})
+	selected, _, _, err := runSelect(t, "a\r", []string{"alpha", "beta", "gamma"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(selected) != 3 {
 		t.Fatalf("selected = %v, want all three", selected)
 	}
-	selected, _, _, err = runSelect(" a\r", []string{"alpha", "beta"})
+	selected, _, _, err = runSelect(t, " a\r", []string{"alpha", "beta"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func TestSelectAllTogglesEverything(t *testing.T) {
 }
 
 func TestSelectJKNavigation(t *testing.T) {
-	selected, _, _, err := runSelect("jjk \r", []string{"alpha", "beta", "gamma"})
+	selected, _, _, err := runSelect(t, "jjk \r", []string{"alpha", "beta", "gamma"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +84,7 @@ func TestSelectJKNavigation(t *testing.T) {
 }
 
 func TestSelectNavigationStopsAtEdges(t *testing.T) {
-	selected, _, _, err := runSelect("kk \r", []string{"alpha", "beta"})
+	selected, _, _, err := runSelect(t, "kk \r", []string{"alpha", "beta"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +95,7 @@ func TestSelectNavigationStopsAtEdges(t *testing.T) {
 
 func TestSelectCancelKeys(t *testing.T) {
 	for _, keys := range []string{"q", "\x03"} {
-		selected, terminal, _, err := runSelect(keys, []string{"alpha"})
+		selected, terminal, _, err := runSelect(t, keys, []string{"alpha"})
 		if !errors.Is(err, ErrCancelled) {
 			t.Fatalf("keys %q err = %v, want ErrCancelled", keys, err)
 		}
@@ -107,15 +109,91 @@ func TestSelectCancelKeys(t *testing.T) {
 }
 
 func TestSelectRendersCheckboxes(t *testing.T) {
-	_, _, output, err := runSelect("\x1b[B \x1b[A\r", []string{"alpha", "beta"})
+	_, _, output, err := runSelect(t, "\x1b[B \x1b[A\r", []string{"alpha", "beta"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output, "[ ] alpha") {
 		t.Fatalf("missing unchecked alpha: %q", output)
 	}
-	if !strings.Contains(output, "[x] beta") {
-		t.Fatalf("missing checked beta: %q", output)
+	if !strings.Contains(output, "\x1b[32m[x]\x1b[0m beta") {
+		t.Fatalf("missing green checked beta: %q", output)
+	}
+}
+
+func TestSelectFirstRenderUsesCarriageReturns(t *testing.T) {
+	_, _, output, err := runSelect(t, "\r", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// In raw mode a bare \n keeps the cursor column, which staircases the
+	// rows; rows must be separated by \r\n.
+	want := "\x1b[36m> [ ] alpha\x1b[K\x1b[0m\r\n  [ ] beta\x1b[K\r\n"
+	if !strings.HasPrefix(output, want) {
+		t.Fatalf("first render = %q, want prefix %q", output, want)
+	}
+}
+
+func TestSelectRedrawMovesUpOptionCount(t *testing.T) {
+	_, _, output, err := runSelect(t, "\x1b[B\r", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two rows are drawn (both options plus hint) and the cursor rests on
+	// the hint row, so redraw must move up exactly len(options) rows.
+	if !strings.Contains(output, "\x1b[2A\r") {
+		t.Fatalf("redraw escape missing: %q", output)
+	}
+}
+
+func TestSelectColorsEnabled(t *testing.T) {
+	_, _, output, err := runSelect(t, "\r", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cursor row in cyan.
+	if !strings.Contains(output, "\x1b[36m> [ ] alpha\x1b[K\x1b[0m") {
+		t.Fatalf("missing cyan cursor row: %q", output)
+	}
+	if strings.Contains(output, "\x1b[36m  [ ] beta") {
+		t.Fatalf("non-cursor row colored cyan: %q", output)
+	}
+}
+
+func TestSelectColorsCheckedGreen(t *testing.T) {
+	_, _, output, err := runSelect(t, " \r", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "\x1b[32m[x]\x1b[0m alpha") {
+		t.Fatalf("missing green checked box: %q", output)
+	}
+	if strings.Contains(output, "\x1b[32m[ ]") {
+		t.Fatalf("unchecked box colored green: %q", output)
+	}
+}
+
+func TestSelectColorsHintDim(t *testing.T) {
+	_, _, output, err := runSelect(t, "\r", []string{"alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "\x1b[2m  ↑/↓ or j/k move · space toggle · a all · enter confirm · q cancel\x1b[K\x1b[0m") {
+		t.Fatalf("missing dim hint line: %q", output)
+	}
+}
+
+func TestSelectColorsDisabledWithoutColor(t *testing.T) {
+	terminal := &fakeTerminal{}
+	var output bytes.Buffer
+	_, err := Select([]string{"alpha"}, IO{In: strings.NewReader("\r"), Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, escape := range []string{"\x1b[0m", "\x1b[36m", "\x1b[32m", "\x1b[2m"} {
+		if strings.Contains(output.String(), escape) {
+			t.Fatalf("colorless IO emitted color escape %q: %q", escape, output.String())
+		}
 	}
 }
 

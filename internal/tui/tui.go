@@ -29,6 +29,7 @@ type IO struct {
 	Out     io.Writer
 	MakeRaw func(int) (*term.State, error)
 	Restore func(int, *term.State) error
+	Color   bool
 }
 
 const hintLine = "  ↑/↓ or j/k move · space toggle · a all · enter confirm · q cancel"
@@ -49,12 +50,12 @@ func Select(options []string, io IO) ([]string, error) {
 	}
 	checked := make([]bool, len(options))
 	cursor := 0
-	render(io.Out, options, checked, cursor, false)
+	render(io.Out, options, checked, cursor, false, io.Color)
 	selection, loopErr := readKeys(io.In, options, checked, &cursor, func() {
-		render(io.Out, options, checked, cursor, true)
+		render(io.Out, options, checked, cursor, true, io.Color)
 	})
 	restoreErr := io.Restore(int(fd), state)
-	_, _ = fmt.Fprintln(io.Out)
+	_, _ = fmt.Fprint(io.Out, "\r\n")
 	if loopErr != nil {
 		return nil, errors.Join(loopErr, restoreErr)
 	}
@@ -142,22 +143,40 @@ func handleEscape(in io.Reader, options []string, checked []bool, cursor *int, r
 	return false, nil
 }
 
-func render(out io.Writer, options []string, checked []bool, cursor int, redraw bool) {
+const (
+	ansiReset      = "\x1b[0m"
+	ansiCyan       = "\x1b[36m"
+	ansiGreen      = "\x1b[32m"
+	ansiDim        = "\x1b[2m"
+	clearLineToEnd = "\x1b[K"
+)
+
+func render(out io.Writer, options []string, checked []bool, cursor int, redraw, color bool) {
 	var builder strings.Builder
 	if redraw {
-		fmt.Fprintf(&builder, "\x1b[%dA\r", len(options)+1)
+		fmt.Fprintf(&builder, "\x1b[%dA\r", len(options))
 	}
 	for index, option := range options {
 		box := "[ ]"
 		if checked[index] {
 			box = "[x]"
+			if color {
+				box = ansiGreen + box + ansiReset
+			}
 		}
-		marker := "  "
+		row := "  " + box + " " + option + clearLineToEnd
 		if index == cursor {
-			marker = "> "
+			row = "> " + box + " " + option + clearLineToEnd
+			if color {
+				row = ansiCyan + row + ansiReset
+			}
 		}
-		builder.WriteString(marker + box + " " + option + "\x1b[K\n")
+		builder.WriteString(row + "\r\n")
 	}
-	builder.WriteString(hintLine + "\x1b[K")
+	hint := hintLine + clearLineToEnd
+	if color {
+		hint = ansiDim + hint + ansiReset
+	}
+	builder.WriteString(hint)
 	_, _ = fmt.Fprint(out, builder.String())
 }

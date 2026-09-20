@@ -132,6 +132,97 @@ func TestLockStoresLockfileInConfigDirectory(t *testing.T) {
 	}
 }
 
+func TestListWorksWithoutLockFile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.first]\ninline = \"echo first\"\n\n[plugins.second]\ninline = \"echo second\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"list"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "first\nsecond\n" {
+		t.Fatalf("list output = %q", output.String())
+	}
+}
+
+func TestListReflectsConfigNotStaleLock(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.kept]\ninline = \"echo kept\"\n\n[plugins.added]\ninline = \"echo added\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleLock := "config_fingerprint = \"stale\"\nshell = \"zsh\"\n\n[[plugins]]\n  name = \"removed\"\n  directory = \"/tmp/removed\"\n  files = []\n"
+	if err := os.WriteFile(filepath.Join(configDir, "plugins.lock"), []byte(staleLock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"list"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "kept\nadded\n" {
+		t.Fatalf("list output = %q, want configured plugins only", output.String())
+	}
+}
+
+func TestRemoveInteractiveWorksWithoutLockFile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.alpha]\ninline = \"echo a\"\n\n[plugins.beta]\ninline = \"echo b\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	original := interactiveSelect
+	interactiveSelect = func(options []string, _ io.Writer) ([]string, error) {
+		if len(options) != 2 || options[0] != "alpha" || options[1] != "beta" {
+			t.Errorf("picker options = %v, want alpha, beta from config", options)
+		}
+		return []string{"alpha"}, nil
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"remove", "--interactive"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "plugins.alpha") {
+		t.Fatalf("alpha still configured: %s", contents)
+	}
+	if !strings.Contains(string(contents), "plugins.beta") {
+		t.Fatalf("beta lost: %s", contents)
+	}
+}
+
 func TestListPrintsLockedPluginNames(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

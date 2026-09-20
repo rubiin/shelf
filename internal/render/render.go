@@ -179,21 +179,19 @@ func resolveTemplateIterable(name string, data PluginData) ([]string, error) {
 	}
 }
 
+var (
+	expressionPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+	blankLinesPattern = regexp.MustCompile(`\n{3,}`)
+)
+
 func expandTemplateExpressions(text string, data PluginData) (string, error) {
 	if !strings.Contains(text, "{{") {
-		result := strings.NewReplacer(
-			"{name}", data.Name,
-			"{dir}", data.Directory,
-			"{file}", data.File,
-			"{nl}", "\n",
-		).Replace(text)
-		return result, nil
+		return placeholderReplacer(data).Replace(text), nil
 	}
 
-	re := regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 	var result strings.Builder
 	last := 0
-	for _, match := range re.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range expressionPattern.FindAllStringSubmatchIndex(text, -1) {
 		result.WriteString(text[last:match[0]])
 		value, err := resolveTemplateValue(text[match[2]:match[3]], data)
 		if err != nil {
@@ -204,6 +202,15 @@ func expandTemplateExpressions(text string, data PluginData) (string, error) {
 	}
 	result.WriteString(text[last:])
 	return result.String(), nil
+}
+
+func placeholderReplacer(data PluginData) *strings.Replacer {
+	return strings.NewReplacer(
+		"{name}", data.Name,
+		"{dir}", data.Directory,
+		"{file}", data.File,
+		"{nl}", "\n",
+	)
 }
 
 func resolveTemplateValue(expr string, data PluginData) (string, error) {
@@ -249,8 +256,7 @@ func normalizeRenderedOutput(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.TrimLeft(text, "\n")
 	text = strings.TrimRight(text, "\n")
-	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
-	return text
+	return blankLinesPattern.ReplaceAllString(text, "\n\n")
 }
 
 func defaultTemplate(shell string) string {
