@@ -9,11 +9,19 @@ import (
 
 func Load(path string) (Config, error) {
 	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	metadata, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	if cfg.Plugins == nil {
 		cfg.Plugins = map[string]RawPlugin{}
+	}
+	for _, key := range metadata.Keys() {
+		if len(key) == 2 && key[0] == "plugins" {
+			if _, exists := cfg.Plugins[key[1]]; exists {
+				cfg.PluginOrder = append(cfg.PluginOrder, key[1])
+			}
+		}
 	}
 	return cfg, nil
 }

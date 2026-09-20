@@ -1,11 +1,12 @@
 package config
 
 type Config struct {
-	Shell     Shell                `toml:"shell"`
-	Matches   []string             `toml:"match"`
-	Apply     []string             `toml:"apply"`
-	Templates map[string]string    `toml:"templates"`
-	Plugins   map[string]RawPlugin `toml:"plugins"`
+	Shell       Shell                `toml:"shell"`
+	Matches     []string             `toml:"match"`
+	Apply       []string             `toml:"apply"`
+	Templates   map[string]string    `toml:"templates"`
+	Plugins     map[string]RawPlugin `toml:"plugins"`
+	PluginOrder []string             `toml:"-"`
 }
 
 type RawPlugin struct {
