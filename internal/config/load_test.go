@@ -7,8 +7,8 @@ import (
 )
 
 func TestLoadAndValidatePluginSources(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
-	contents := "shell = \"bash\"\n\n[plugins.fzf]\ngithub = \"junegunn/fzf\"\nuse = [\"shell/*.bash\"]\napply = [\"source {file}\"]\nprofiles = [\"work\"]\n"
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "shell = \"bash\"\n\n[plugins.fzf]\ngithub = \"junegunn/fzf\"\nuse = [\"shell/*.bash\"]\napply = [\"source {file}\"]\nprofiles = [\"work\"]\nhooks = { post = \"echo loaded\" }\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestLoadAndValidatePluginSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	plugin, ok := cfg.Plugins["fzf"]
-	if !ok || plugin.GitHub != "junegunn/fzf" || len(plugin.Use) != 1 || plugin.Profiles[0] != "work" {
+	if !ok || plugin.GitHub != "junegunn/fzf" || len(plugin.Use) != 1 || plugin.Profiles[0] != "work" || plugin.Hooks["post"] != "echo loaded" {
 		t.Fatalf("unexpected plugin: %+v", plugin)
 	}
 }

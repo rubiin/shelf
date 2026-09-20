@@ -8,7 +8,7 @@ import (
 )
 
 func TestAddAndRemovePreserveUnrelatedTOML(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"bash\"\n\n[templates]\ncustom = \"source {file}\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)

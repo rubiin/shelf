@@ -19,17 +19,17 @@ func TestResolvePathsUsesXDGDefaults(t *testing.T) {
 	if paths.DataDirectory != filepath.Join(home, ".local", "share", "shelf") {
 		t.Fatalf("data directory = %q", paths.DataDirectory)
 	}
-	if paths.ConfigFile != filepath.Join(paths.ConfigDirectory, "plugins.toml") {
+	if paths.ConfigFile != filepath.Join(paths.ConfigDirectory, "config.toml") {
 		t.Fatalf("config file = %q", paths.ConfigFile)
 	}
 }
 
 func TestResolvePathsHonorsExplicitOverrides(t *testing.T) {
-	paths, err := ResolvePaths("/home/tester", "/tmp/config", "/tmp/data", "/tmp/plugins.toml")
+	paths, err := ResolvePaths("/home/tester", "/tmp/config", "/tmp/data", "/tmp/config.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if paths.ConfigDirectory != "/tmp/config" || paths.DataDirectory != "/tmp/data" || paths.ConfigFile != "/tmp/plugins.toml" {
+	if paths.ConfigDirectory != "/tmp/config" || paths.DataDirectory != "/tmp/data" || paths.ConfigFile != "/tmp/config.toml" {
 		t.Fatalf("unexpected paths: %+v", paths)
 	}
 }

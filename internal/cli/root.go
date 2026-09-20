@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"shelf/internal/config"
@@ -59,7 +60,7 @@ func NewRoot() *cobra.Command {
 		Use:   "lock",
 		Short: "Install plugin sources and write the lock file",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			mode := lock.ModeNormal
 			if update {
 				mode = lock.ModeUpdate
@@ -67,7 +68,7 @@ func NewRoot() *cobra.Command {
 			if reinstall {
 				mode = lock.ModeReinstall
 			}
-			return lockConfig(mode)
+			return lockConfig(mode, cmd.ErrOrStderr())
 		},
 	}
 	lockCommand.Flags().BoolVar(&update, "update", false, "update plugin sources")
@@ -172,7 +173,7 @@ func NewRoot() *cobra.Command {
 	return command
 }
 
-func lockConfig(mode lock.Mode) error {
+func lockConfig(mode lock.Mode, diagnostics io.Writer) error {
 	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
 	if err != nil {
 		return err
@@ -184,6 +185,11 @@ func lockConfig(mode lock.Mode) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
+	colors := newColors(color, diagnostics)
+	fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Loaded"), displayPath(paths.ConfigFile))
+	for _, plugin := range cfg.Plugins {
+		fmt.Fprintf(diagnostics, "%s %s\n", colors.status("Checked"), pluginSource(plugin))
+	}
 	shell := cfg.Shell
 	if shell == "" {
 		shell = configShell()
@@ -192,7 +198,37 @@ func lockConfig(mode lock.Mode) error {
 	if err != nil {
 		return err
 	}
-	return lock.Write(filepath.Join(paths.DataDirectory, "plugins.lock"), locked)
+	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
+	if err := lock.Write(lockPath, locked); err != nil {
+		return err
+	}
+	fmt.Fprintf(diagnostics, "%s %s\n", colors.header("Locked"), displayPath(lockPath))
+	return nil
+}
+
+func pluginSource(plugin config.RawPlugin) string {
+	switch {
+	case plugin.GitHub != "":
+		return "https://github.com/" + plugin.GitHub
+	case plugin.Git != "":
+		return plugin.Git
+	case plugin.Gist != "":
+		return "https://gist.github.com/" + plugin.Gist
+	case plugin.Remote != "":
+		return plugin.Remote
+	case plugin.Local != "":
+		return plugin.Local
+	default:
+		return "inline"
+	}
+}
+
+func displayPath(path string) string {
+	home := homeDir()
+	if home != "" && strings.HasPrefix(path, home+string(filepath.Separator)) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
 }
 
 func editConfig() error {
@@ -228,7 +264,7 @@ func sourceConfig(output io.Writer, force bool, mode lock.Mode) error {
 		shell = configShell()
 	}
 	lockContext := lock.Context{ConfigFile: paths.ConfigFile, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)}
-	lockPath := filepath.Join(paths.DataDirectory, "plugins.lock")
+	lockPath := filepath.Join(paths.ConfigDirectory, "plugins.lock")
 	var locked lock.LockedConfig
 	if !force {
 		locked, err = lock.Read(lockPath)
@@ -283,7 +319,7 @@ func RuntimeContext() Context {
 	}
 	resolvedConfigFile := configFile
 	if resolvedConfigFile == "" {
-		resolvedConfigFile = filepath.Join(configDirectory, "plugins.toml")
+		resolvedConfigFile = filepath.Join(configDirectory, "config.toml")
 	}
 	return Context{ConfigFile: resolvedConfigFile, ConfigDirectory: configDirectory, DataDirectory: dataDirectory, Profile: profile, Quiet: quiet, NonInteractive: nonInteractive, Verbose: verbose, Color: color}
 }

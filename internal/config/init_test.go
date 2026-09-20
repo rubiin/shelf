@@ -7,7 +7,7 @@ import (
 )
 
 func TestInitializeCreatesBashConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "plugins.toml")
+	path := filepath.Join(t.TempDir(), "nested", "config.toml")
 	if err := Initialize(path, Bash); err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestInitializeCreatesBashConfig(t *testing.T) {
 }
 
 func TestInitializeDoesNotOverwriteExistingConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := []byte("# user config\n")
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)

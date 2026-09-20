@@ -31,7 +31,7 @@ func ResolvePaths(home, configDirectory, dataDirectory, configFile string) (Path
 		dataDirectory = filepath.Join(base, "shelf")
 	}
 	if configFile == "" {
-		configFile = filepath.Join(configDirectory, "plugins.toml")
+		configFile = filepath.Join(configDirectory, "config.toml")
 	}
 	return Paths{ConfigDirectory: configDirectory, DataDirectory: dataDirectory, ConfigFile: configFile}, nil
 }

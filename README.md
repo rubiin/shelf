@@ -97,7 +97,7 @@ Directory flags keep Sheldon’s names. Their environment equivalents use the
 ```sh
 SHELF_CONFIG_DIR="$HOME/.config/shelf"
 SHELF_DATA_DIR="$HOME/.local/share/shelf"
-SHELF_CONFIG_FILE="$HOME/.config/shelf/plugins.toml"
+SHELF_CONFIG_FILE="$HOME/.config/shelf/config.toml"
 SHELF_PROFILE="work"
 SHELF_SHELL="zsh"
 ```
@@ -134,7 +134,7 @@ glob patterns relative to the installed plugin directory.
 Locking records installed sources and selected files under:
 
 ```text
-$XDG_DATA_HOME/shelf/plugins.lock
+$XDG_CONFIG_HOME/shelf/plugins.lock
 ```
 
 `source` verifies the lock context and selected files. It regenerates the lock
@@ -163,7 +163,7 @@ SHELF_PROFILE=work shelf source
 Use a temporary configuration:
 
 ```sh
-shelf --config-file /tmp/plugins.toml source
+shelf --config-file /tmp/config.toml source
 ```
 
 ## Status
