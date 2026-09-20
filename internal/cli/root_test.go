@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"shelf/internal/config"
 )
 
 func TestRootCommands(t *testing.T) {
@@ -30,6 +32,15 @@ func TestRootCommands(t *testing.T) {
 		command, _, err := root.Find([]string{name})
 		if err != nil || command.Short == "" {
 			t.Errorf("root command %q has no description", name)
+		}
+	}
+	add, _, err := root.Find([]string{"add"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dir", "file", "protocol", "apply", "profiles", "hooks"} {
+		if add.Flags().Lookup(name) == nil {
+			t.Errorf("add flag %q is missing", name)
 		}
 	}
 
@@ -67,5 +78,17 @@ func TestShelfPrefixesDirectoryFlagsAndEnvironment(t *testing.T) {
 	}
 	if profile != "work" {
 		t.Errorf("profile env default = %q", profile)
+	}
+}
+
+func TestConfigShellDefaultsToZsh(t *testing.T) {
+	t.Setenv("SHELF_SHELL", "")
+	if got := configShell(); got != config.Zsh {
+		t.Fatalf("default shell = %q, want %q", got, config.Zsh)
+	}
+
+	t.Setenv("SHELF_SHELL", "bash")
+	if got := configShell(); got != config.Bash {
+		t.Fatalf("explicit shell = %q, want %q", got, config.Bash)
 	}
 }

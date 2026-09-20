@@ -12,6 +12,8 @@ type Request struct {
 	Name      string
 	Git       string
 	GitHub    string
+	Gist      string
+	Protocol  string
 	Remote    string
 	Local     string
 	Inline    string
@@ -19,8 +21,29 @@ type Request struct {
 	Branch    string
 	Tag       string
 	Dir       string
+	File      string
 	Update    bool
 	Reinstall bool
+}
+
+func gitURL(request Request) string {
+	if request.Git != "" {
+		return request.Git
+	}
+	repository := request.GitHub
+	host := "github.com"
+	if request.Gist != "" {
+		repository = request.Gist
+		host = "gist.github.com"
+	}
+	switch request.Protocol {
+	case "ssh":
+		return "git@" + host + ":" + repository + ".git"
+	case "git":
+		return "git://" + host + "/" + repository + ".git"
+	default:
+		return "https://" + host + "/" + repository + ".git"
+	}
 }
 
 type Installed struct {

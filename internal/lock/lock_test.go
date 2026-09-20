@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -56,5 +57,24 @@ func TestBuildPassesPluginDirectoryToInstaller(t *testing.T) {
 	}
 	if requestedDirectory != "plugins/sudo" {
 		t.Fatalf("requested directory = %q", requestedDirectory)
+	}
+}
+
+func TestBuildSelectsConfiguredPluginFile(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "sudo.plugin.zsh")
+	if err := os.WriteFile(file, []byte("echo sudo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"sudo": {Inline: "echo sudo", File: "sudo.plugin.zsh"},
+	}}
+
+	locked, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: directory}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || len(locked.Plugins[0].Files) != 1 || locked.Plugins[0].Files[0] != file {
+		t.Fatalf("selected files = %+v", locked.Plugins)
 	}
 }

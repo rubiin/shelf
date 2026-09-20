@@ -100,3 +100,24 @@ func TestInstallerUsesGitSubdirectory(t *testing.T) {
 		t.Fatalf("plugin file missing from installed directory: %v", err)
 	}
 }
+
+func TestGitURLSupportsGistAndProtocols(t *testing.T) {
+	tests := []struct {
+		name    string
+		request Request
+		want    string
+	}{
+		{name: "gist", request: Request{Gist: "579d02802b1cc17baed07753d09f5009"}, want: "https://gist.github.com/579d02802b1cc17baed07753d09f5009.git"},
+		{name: "github ssh", request: Request{GitHub: "owner/repository", Protocol: "ssh"}, want: "git@github.com:owner/repository.git"},
+		{name: "github git", request: Request{GitHub: "owner/repository", Protocol: "git"}, want: "git://github.com/owner/repository.git"},
+		{name: "github https", request: Request{GitHub: "owner/repository", Protocol: "https"}, want: "https://github.com/owner/repository.git"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := gitURL(test.request); got != test.want {
+				t.Fatalf("git URL = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

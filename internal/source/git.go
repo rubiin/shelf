@@ -9,11 +9,8 @@ import (
 )
 
 func installGit(ctx context.Context, dataDir string, request Request) (Installed, error) {
-	url := request.Git
-	if url == "" {
-		url = "https://github.com/" + request.GitHub + ".git"
-	}
-	if url == "https://github.com/.git" {
+	url := gitURL(request)
+	if request.Git == "" && request.GitHub == "" && request.Gist == "" {
 		return Installed{}, fmt.Errorf("git source is empty")
 	}
 	directory := pluginDir(dataDir, request.Name)
@@ -26,7 +23,7 @@ func installGit(ctx context.Context, dataDir string, request Request) (Installed
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
 			return Installed{}, err
 		}
-		args := []string{"clone", "--", url, directory}
+		args := []string{"clone", "--recurse-submodules", "--", url, directory}
 		if err := runGit(ctx, args...); err != nil {
 			return Installed{}, err
 		}
