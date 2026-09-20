@@ -26,3 +26,16 @@ func TestTemplateExpandsFile(t *testing.T) {
 		t.Fatalf("result = %q", result)
 	}
 }
+
+func TestScriptIncludesPluginHooks(t *testing.T) {
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Hooks: map[string]string{"post": "echo hooked"},
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "echo hooked") {
+		t.Fatalf("hook output missing from script: %q", script)
+	}
+}

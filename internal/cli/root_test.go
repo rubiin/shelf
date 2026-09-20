@@ -9,7 +9,7 @@ import (
 
 func TestRootCommands(t *testing.T) {
 	directory := t.TempDir()
-	configFile := filepath.Join(directory, "plugins.toml")
+	configFile := filepath.Join(directory, "config.toml")
 	if err := os.WriteFile(configFile, []byte("shell = \"bash\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestRootCommands(t *testing.T) {
 func TestShelfPrefixesDirectoryFlagsAndEnvironment(t *testing.T) {
 	t.Setenv("SHELF_CONFIG_DIR", "/env/config")
 	t.Setenv("SHELF_DATA_DIR", "/env/data")
-	t.Setenv("SHELF_CONFIG_FILE", "/env/plugins.toml")
+	t.Setenv("SHELF_CONFIG_FILE", "/env/config.toml")
 	t.Setenv("SHELF_PROFILE", "work")
 
 	root := NewRoot()
@@ -62,7 +62,7 @@ func TestShelfPrefixesDirectoryFlagsAndEnvironment(t *testing.T) {
 	if got := root.PersistentFlags().Lookup("data-dir").DefValue; got != "/env/data" {
 		t.Errorf("data dir default = %q", got)
 	}
-	if got := root.PersistentFlags().Lookup("config-file").DefValue; got != "/env/plugins.toml" {
+	if got := root.PersistentFlags().Lookup("config-file").DefValue; got != "/env/config.toml" {
 		t.Errorf("config file default = %q", got)
 	}
 	if profile != "work" {
