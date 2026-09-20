@@ -1,8 +1,8 @@
-// Package tui implements the interactive terminal picker used by commands
-// such as remove --interactive.
+// Package tui implements the interactive terminal picker used by remove --interactive.
 package tui
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +12,10 @@ import (
 	"golang.org/x/term"
 )
 
-// ErrCancelled is returned when the user aborts the picker with q,
-// escape, or ctrl+c.
+// ErrCancelled is returned when the user aborts the picker with q, escape, or ctrl+c.
 var ErrCancelled = errors.New("selection cancelled")
 
-// Terminal abstracts raw-mode control so the picker can be tested with
-// scripted keystrokes.
+// Terminal abstracts raw-mode control so the picker can be tested with scripted keystrokes.
 type Terminal interface {
 	MakeRaw(int) (*term.State, error)
 	Restore(int, *term.State) error
@@ -34,8 +32,7 @@ type IO struct {
 
 const hintLine = "  ↑/↓ or j/k move · space toggle · a all · enter confirm · q cancel"
 
-// Select shows an interactive checkbox list and returns the chosen options
-// in their original order. It returns ErrCancelled when the user aborts.
+// Select shows an interactive checkbox list and returns the chosen options in their original order.
 func Select(options []string, io IO) ([]string, error) {
 	if len(options) == 0 {
 		return nil, errors.New("no options to select")
@@ -63,12 +60,13 @@ func Select(options []string, io IO) ([]string, error) {
 }
 
 func readKeys(in io.Reader, options []string, checked []bool, cursor *int, redraw func()) ([]string, error) {
-	buffer := make([]byte, 1)
+	reader := bufio.NewReader(in)
 	for {
-		if _, err := in.Read(buffer); err != nil {
+		key, err := reader.ReadByte()
+		if err != nil {
 			return nil, fmt.Errorf("read key: %w", err)
 		}
-		done, err := handleKey(in, buffer[0], options, checked, cursor, redraw)
+		done, err := handleKey(reader, key, options, checked, cursor, redraw)
 		if err != nil {
 			return nil, err
 		}
@@ -85,7 +83,7 @@ func readKeys(in io.Reader, options []string, checked []bool, cursor *int, redra
 	return selection, nil
 }
 
-func handleKey(in io.Reader, key byte, options []string, checked []bool, cursor *int, redraw func()) (bool, error) {
+func handleKey(in *bufio.Reader, key byte, options []string, checked []bool, cursor *int, redraw func()) (bool, error) {
 	switch key {
 	case '\r', '\n':
 		return true, nil
@@ -116,18 +114,27 @@ func handleKey(in io.Reader, key byte, options []string, checked []bool, cursor 
 	return false, nil
 }
 
-func handleEscape(in io.Reader, options []string, checked []bool, cursor *int, redraw func()) (bool, error) {
-	var sequence [1]byte
-	if _, err := in.Read(sequence[:]); err != nil {
+func handleEscape(in *bufio.Reader, options []string, checked []bool, cursor *int, redraw func()) (bool, error) {
+	// A lone ESC press leaves nothing buffered, so it cancels; terminals send ESC [ A as one burst.
+	if in.Buffered() == 0 {
 		return false, ErrCancelled
 	}
-	if sequence[0] != '[' {
+	prefix, err := in.ReadByte()
+	if err != nil {
 		return false, ErrCancelled
 	}
-	if _, err := in.Read(sequence[:]); err != nil {
+	if prefix != '[' {
+		// Alt+key and other unrecognized prefixes are ignored, not treated as a cancel.
+		return false, nil
+	}
+	if in.Buffered() == 0 {
 		return false, ErrCancelled
 	}
-	switch sequence[0] {
+	sequence, err := in.ReadByte()
+	if err != nil {
+		return false, ErrCancelled
+	}
+	switch sequence {
 	case 'A':
 		if *cursor > 0 {
 			*cursor--
@@ -137,7 +144,8 @@ func handleEscape(in io.Reader, options []string, checked []bool, cursor *int, r
 			*cursor++
 		}
 	default:
-		return false, ErrCancelled
+		// Unsupported sequences (Home, End, shift-tab, ...) are ignored rather than cancelling.
+		return false, nil
 	}
 	redraw()
 	return false, nil

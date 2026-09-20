@@ -3,8 +3,10 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -108,6 +110,51 @@ func TestSelectCancelKeys(t *testing.T) {
 	}
 }
 
+func TestSelectBareEscapeCancels(t *testing.T) {
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = readPipe.Close() }()
+	defer func() { _ = writePipe.Close() }()
+
+	terminal := &fakeTerminal{}
+	var output bytes.Buffer
+	finished := make(chan error, 1)
+	go func() {
+		_, err := Select([]string{"alpha", "beta"}, IO{In: readPipe, Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore})
+		finished <- err
+	}()
+	if _, err := writePipe.Write([]byte{0x1b}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-finished:
+		if !errors.Is(err, ErrCancelled) {
+			t.Fatalf("bare escape err = %v, want ErrCancelled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a lone escape press did not cancel the picker")
+	}
+	if !terminal.restored {
+		t.Fatal("terminal not restored after bare escape")
+	}
+}
+
+func TestSelectEscapePrefixKeepsSelection(t *testing.T) {
+	// Alt+key and unsupported escape sequences are ignored, not treated as a cancel.
+	for _, keys := range []string{"\x1bx \r", "\x1b[Z \r"} {
+		selected, _, _, err := runSelect(t, keys, []string{"alpha", "beta"})
+		if err != nil {
+			t.Fatalf("keys %q err = %v", keys, err)
+		}
+		if len(selected) != 1 || selected[0] != "alpha" {
+			t.Fatalf("keys %q selected = %v, want [alpha]", keys, selected)
+		}
+	}
+}
+
 func TestSelectRendersCheckboxes(t *testing.T) {
 	_, _, output, err := runSelect(t, "\x1b[B \x1b[A\r", []string{"alpha", "beta"})
 	if err != nil {
@@ -126,8 +173,7 @@ func TestSelectFirstRenderUsesCarriageReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// In raw mode a bare \n keeps the cursor column, which staircases the
-	// rows; rows must be separated by \r\n.
+	// Rows must be separated by \r\n: in raw mode a bare \n keeps the cursor column.
 	want := "\x1b[36m> [ ] alpha\x1b[K\x1b[0m\r\n  [ ] beta\x1b[K\r\n"
 	if !strings.HasPrefix(output, want) {
 		t.Fatalf("first render = %q, want prefix %q", output, want)
@@ -139,8 +185,7 @@ func TestSelectRedrawMovesUpOptionCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two rows are drawn (both options plus hint) and the cursor rests on
-	// the hint row, so redraw must move up exactly len(options) rows.
+	// The cursor rests on the hint row, so redraw moves up exactly len(options) rows.
 	if !strings.Contains(output, "\x1b[2A\r") {
 		t.Fatalf("redraw escape missing: %q", output)
 	}
