@@ -33,7 +33,7 @@ archives:
       - LICENSE
 
 aurs:
-  - name: shelf
+  - name: shelf-sh
     homepage: https://github.com/rubiin/shelf
     description: Fast, configurable shell plugin manager written in Go.
     license: GPL-3.0-only
@@ -42,9 +42,9 @@ aurs:
     git_url: ssh://aur@aur.archlinux.org/shelf-bin.git
     private_key: "{{ .Env.AUR_KEY }}"
     provides:
-      - shelf
+      - shelf-sh
     conflicts:
-      - shelf
+      - shelf-sh
     package: |-
       # bin
       install -Dm755 "./shelf" "${pkgdir}/usr/bin/shelf"
