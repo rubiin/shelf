@@ -155,10 +155,16 @@ SHELF_DATA_DIR="$HOME/.local/share/shelf"
 SHELF_CONFIG_FILE="$HOME/.config/shelf/config.toml"
 SHELF_PROFILE="work"
 SHELF_SHELL="zsh"
+SHELF_EDITOR="nvim --wait"
 ```
 
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` still control base directories when
 explicit shelf directory flags are absent.
+
+`shelf edit` picks its editor in this order: `SHELF_EDITOR`, then `VISUAL`,
+then `EDITOR`. The value is split with shell-word rules, so quoted paths and
+flags with spaces are preserved. `SHELF_SHELL` accepts only `bash` or `zsh`;
+another value is an error rather than a silent fallback.
 
 ## Configuration
 
