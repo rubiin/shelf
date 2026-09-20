@@ -9,16 +9,46 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-func selectFiles(directory string, patterns []string) ([]string, error) {
+func defaultMatches(shell string) []string {
+	if shell == "zsh" {
+		return []string{
+			"{{ name }}.plugin.zsh",
+			"{{ name }}.zsh",
+			"{{ name }}.sh",
+			"{{ name }}.zsh-theme",
+			"*.plugin.zsh",
+			"*.zsh",
+			"*.sh",
+			"*.zsh-theme",
+		}
+	}
+	return []string{
+		"{{ name }}.plugin.bash",
+		"{{ name }}.plugin.sh",
+		"{{ name }}.bash",
+		"{{ name }}.sh",
+		"*.plugin.bash",
+		"*.plugin.sh",
+		"*.bash",
+		"*.sh",
+	}
+}
+
+func selectFiles(directory, name, shell string, patterns []string, firstMatch bool) ([]string, error) {
 	if len(patterns) == 0 {
-		patterns = []string{"*.sh", "*.bash", "*.zsh"}
+		patterns = defaultMatches(shell)
+		firstMatch = true
 	}
 	seen := map[string]bool{}
 	var files []string
 	for _, pattern := range patterns {
-		matches, err := doublestar.Glob(os.DirFS(directory), pattern)
+		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
+		matches, err := doublestar.Glob(os.DirFS(directory), rendered)
 		if err != nil {
 			return nil, err
+		}
+		if len(matches) == 0 {
+			continue
 		}
 		sort.Strings(matches)
 		for _, match := range matches {
@@ -28,6 +58,9 @@ func selectFiles(directory string, patterns []string) ([]string, error) {
 			}
 			seen[match] = true
 			files = append(files, match)
+		}
+		if firstMatch {
+			break
 		}
 	}
 	return files, nil
