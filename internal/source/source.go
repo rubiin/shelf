@@ -18,6 +18,7 @@ type Request struct {
 	Ref       string
 	Branch    string
 	Tag       string
+	Dir       string
 	Update    bool
 	Reinstall bool
 }
@@ -62,3 +63,10 @@ func remoteFileName(rawURL string) string {
 }
 
 func ensureDir(path string) error { return os.MkdirAll(path, 0o755) }
+
+func sourceDirectory(root, directory string) string {
+	if directory == "" || directory == "." {
+		return filepath.Clean(root)
+	}
+	return filepath.Join(root, filepath.Clean(directory))
+}

@@ -25,7 +25,7 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 		installed, err := installer.Install(context.Background(), source.Request{
 			Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Remote: plugin.Remote,
 			Local: plugin.Local, Inline: plugin.Inline, Ref: plugin.Rev, Branch: plugin.Branch,
-			Tag: plugin.Tag, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
+			Tag: plugin.Tag, Dir: plugin.Dir, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
 		})
 		if err != nil {
 			return LockedConfig{}, fmt.Errorf("install plugin %q: %w", name, err)
