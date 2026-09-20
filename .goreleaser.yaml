@@ -12,7 +12,6 @@ builds:
       - -X main.version={{.Version}}
     goos:
       - linux
-      - windows
       - darwin
 
 archives:
@@ -25,10 +24,6 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - LICENSE
 
@@ -60,10 +55,10 @@ aurs:
 
 
 nfpms:
-  - package_name: linklint
+  - package_name: shelf
     file_name_template: '{{ .ConventionalFileName }}'
-    homepage: https://github.com/rubiin/linklint
-    description: Fast CLI link checker for local files
+    homepage: https://github.com/rubiin/shelf
+    description: Fast, configurable shell plugin manager written in Go.
     license: GPL-3.0-only
     maintainer: "rubiin <roobin.bhandari@gmail.com>"
     formats:
@@ -73,7 +68,7 @@ nfpms:
     bindir: /usr/bin
     contents:
       - src: ./LICENSE
-        dst: /usr/share/licenses/linklint/LICENSE
+        dst: /usr/share/licenses/shelf/LICENSE
 
 changelog:
   sort: desc
