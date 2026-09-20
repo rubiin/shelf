@@ -3,13 +3,33 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
 
 	"github.com/BurntSushi/toml"
 )
 
+// Load reads and decodes the config at path.
 func Load(path string) (Config, error) {
+	cfg, _, err := LoadWithContents(path)
+	return cfg, err
+}
+
+// LoadWithContents also returns the bytes it read, so callers need not read config.toml twice.
+func LoadWithContents(path string) (Config, []byte, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, nil, fmt.Errorf("decode config: %w", err)
+	}
+	cfg, err := decode(contents)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	return cfg, contents, nil
+}
+
+func decode(contents []byte) (Config, error) {
 	var cfg Config
-	metadata, err := toml.DecodeFile(path, &cfg)
+	metadata, err := toml.Decode(string(contents), &cfg)
 	if err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
