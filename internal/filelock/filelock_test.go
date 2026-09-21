@@ -3,6 +3,7 @@ package filelock
 import (
 	"bytes"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -53,6 +54,28 @@ func TestAcquireSharesConcurrentReadLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = second.Release() }()
+}
+
+func TestAcquireCreatesNoLockFile(t *testing.T) {
+	directory := t.TempDir()
+	before, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := Acquire(directory, true, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("lock acquisition changed directory contents: before %d entries, after %d", len(before), len(after))
+	}
 }
 
 func TestAcquireReportsWhenItWaits(t *testing.T) {

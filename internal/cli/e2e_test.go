@@ -38,6 +38,36 @@ func TestInlineLockAndSource(t *testing.T) {
 	}
 }
 
+func TestSourceLeavesNoStrayLockFile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Execute([]string{"source"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "echo testing") {
+		t.Fatalf("source output = %q", output.String())
+	}
+	stray := filepath.Join(configDir, ".lock")
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Fatalf("source left a stray lock file at %s: %v", stray, err)
+	}
+}
+
 func TestUpdateEmitsSourceWithoutWritingLockfile(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

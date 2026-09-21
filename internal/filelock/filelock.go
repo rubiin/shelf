@@ -1,4 +1,4 @@
-// Package filelock serializes shelf processes through an advisory lock on the config directory.
+// Package filelock serializes shelf processes through an advisory flock on the config directory.
 package filelock
 
 import (
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"syscall"
 )
 
@@ -15,14 +14,16 @@ type Guard struct {
 	file *os.File
 }
 
-// Acquire locks directory/.lock, blocking while another process holds it; a missing directory is left unlocked.
+// Acquire locks the directory itself with flock, blocking while another process
+// holds it; a missing directory is left unlocked. The directory is opened
+// read-only and locked directly, so no lock file is created inside it.
 func Acquire(directory string, exclusive bool, warnings io.Writer) (*Guard, error) {
 	if _, err := os.Stat(directory); errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(filepath.Join(directory, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.Open(directory)
 	if err != nil {
 		return nil, err
 	}
