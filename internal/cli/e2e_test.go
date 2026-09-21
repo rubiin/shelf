@@ -111,6 +111,80 @@ func TestPathPrintsResolvedPaths(t *testing.T) {
 	}
 }
 
+func TestReloadPrintsExecForTheConfiguredShell(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		shell string
+		want  string
+		env   string
+	}{
+		{name: "zsh", shell: "zsh", want: "exec zsh\n"},
+		{name: "bash", shell: "bash", want: "exec bash\n"},
+		// A config without a shell falls back to SHELF_SHELL.
+		{name: "bash via env", shell: "", want: "exec bash\n", env: "bash"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			configDir := filepath.Join(directory, "config")
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			configFile := filepath.Join(configDir, "config.toml")
+			config := ""
+			if test.shell != "" {
+				config = "shell = \"" + test.shell + "\"\n"
+			}
+			if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("SHELF_CONFIG_DIR", configDir)
+			t.Setenv("SHELF_CONFIG_FILE", configFile)
+			t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+			if test.env != "" {
+				t.Setenv("SHELF_SHELL", test.env)
+			} else {
+				t.Setenv("SHELF_SHELL", "")
+			}
+
+			var output bytes.Buffer
+			if err := Execute([]string{"reload"}, &output, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			if output.String() != test.want {
+				t.Fatalf("reload output = %q, want %q", output.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestReloadRejectsAnUnsupportedShellOverride(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_SHELL", "csh")
+
+	var output bytes.Buffer
+	var diagnostics bytes.Buffer
+	if err := Execute([]string{"reload"}, &output, &diagnostics); err == nil {
+		t.Fatal("reload succeeded for an unsupported SHELF_SHELL")
+	}
+	if output.String() != "" {
+		t.Fatalf("reload stdout = %q, want empty", output.String())
+	}
+	if !strings.Contains(diagnostics.String(), `unsupported shell "csh" in SHELF_SHELL`) {
+		t.Fatalf("reload diagnostics = %q, want unsupported shell error", diagnostics.String())
+	}
+}
+
 func TestLockStoresLockfileInDataDirectory(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

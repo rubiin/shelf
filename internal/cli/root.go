@@ -120,6 +120,30 @@ func NewRoot() *cobra.Command {
 	sourceCommand.Flags().IntVar(&sourceConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
 	sourceCommand.MarkFlagsMutuallyExclusive("update", "reinstall")
 	command.AddCommand(sourceCommand)
+	command.AddCommand(&cobra.Command{
+		Use:   "reload",
+		Short: "Print shell code that reloads the current shell",
+		Long: "reload prints an `exec` of the resolved shell, so evaluating it replaces the " +
+			"current shell and re-runs its startup files (which include `eval \"$(shelf " +
+			"source)\"`) after a configuration change, without opening a new terminal.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			paths, err := resolvePaths()
+			if err != nil {
+				return err
+			}
+			cfg, _, err := loadConfigWithFingerprint(paths.ConfigFile)
+			if err != nil {
+				return err
+			}
+			shell, err := resolveShell(cfg)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "exec %s\n", shell)
+			return err
+		},
+	})
 	var updateLock bool
 	var updateConcurrency int
 	updateCommand := &cobra.Command{
