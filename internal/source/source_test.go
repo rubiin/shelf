@@ -91,6 +91,44 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return fn(request) }
 
+func TestInstallerExpandsLocalHomePath(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{
+		Name:  "foo",
+		Local: "~/foo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Directory != filepath.Join(home, "foo") {
+		t.Fatalf("installed directory = %q, want %q", installed.Directory, filepath.Join(home, "foo"))
+	}
+}
+
+func TestInstallerExpandsLocalEnvironmentPath(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PLUGIN_HOME", home)
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+
+	for _, local := range []string{"$PLUGIN_HOME/foo", "${PLUGIN_HOME}/foo"} {
+		installed, err := installer.Install(context.Background(), Request{Name: "foo", Local: local})
+		if err != nil {
+			t.Fatalf("local path %q: %v", local, err)
+		}
+		if installed.Directory != filepath.Join(home, "foo") {
+			t.Fatalf("local path %q installed directory = %q, want %q", local, installed.Directory, filepath.Join(home, "foo"))
+		}
+	}
+}
+
 func TestInstallerPropagatesRequestContext(t *testing.T) {
 	type contextKey struct{}
 	ctx := context.WithValue(context.Background(), contextKey{}, "marker")
