@@ -401,8 +401,7 @@ func TestScriptRendersInlinePluginThroughTheTemplateEngine(t *testing.T) {
 }
 
 func TestScriptRendersBashInlineTextWithoutSourcing(t *testing.T) {
-	// bash parses an eval'd string as one unit, so sourcing the inline text gains nothing;
-	// rendering it straight into the per-plugin eval skips the fork per inline plugin.
+	// bash parses an eval'd string as one unit, so rendering the inline text straight into the per-plugin eval skips the fork per inline plugin.
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:   "greeting",
 		Inline: "echo {{ name }}\n{{ hooks?.pre | nl }}{{ hooks?.post | nl }}",
@@ -431,9 +430,7 @@ func TestScriptPicksAnInlineHeredocDelimiterThatDoesNotCollide(t *testing.T) {
 }
 
 func TestScriptMakesInlineAliasesAvailableToInlineFunctionsInBash(t *testing.T) {
-	// bash expands aliases only when the shell option is on (interactive shells do this) and
-	// reads an eval'd string a line at a time, so the alias is real by the time the function
-	// body is read. The fork-free bash shape must keep this working.
+	// bash expands aliases only when the option is on and reads an eval'd string a line at a time, so the fork-free bash shape must keep aliases real by function-body read time.
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:   "inline",
 		Inline: "alias aliastest='echo aliastest'\nfunctest() { aliastest; }\nfunctest\n",

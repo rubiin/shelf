@@ -681,8 +681,7 @@ func TestStatusChecksGitRevisionsInParallelAndKeepsOrder(t *testing.T) {
 	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	// Drift the second checkout so the two git checks disagree; both still report in
-	// declaration order even though they run concurrently.
+	// Drift the second checkout so the two git checks disagree; both still report in declaration order despite running concurrently.
 	checkout, err := source.GitDirectory(filepath.Join(directory, "data"), source.Request{Git: secondRepository})
 	if err != nil {
 		t.Fatal(err)
@@ -1248,8 +1247,7 @@ func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
 }
 
 func TestSourceRelocksWhenTheShellOverrideChanges(t *testing.T) {
-	// SHELF_SHELL only matters when the config omits `shell`, and the lock remembers which shell
-	// built it, so dropping the override has to relock rather than keep rendering bash code.
+	// SHELF_SHELL only matters when the config omits `shell`, and the lock remembers it, so dropping the override has to relock.
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {

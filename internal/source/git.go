@@ -31,14 +31,7 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
 			return Installed{}, err
 		}
-		// Fresh installs fetch only the requested ref's tip (or the remote's default
-		// branch when no ref is set) instead of the whole history, which is all most
-		// shell plugins need. A depth-limited clone can't always reach a bare commit
-		// SHA pinned with `rev` — the server must choose to serve it (e.g. GitHub's
-		// allowReachableSHA1InWant) — so fall back to the full clone when the cheap
-		// attempt fails, rather than risking a broken install. Per-plugin cloneopts
-		// pass through to git clone, and depth overrides the shallow default (0 is a
-		// full clone, like zplug's depth:0).
+		// Fresh installs shallow-clone the requested ref's tip; a depth-limited clone may not reach a pinned bare SHA, so fall back to a full clone. CloneOpts pass through, and depth 0 is a full clone.
 		args := []string{"clone"}
 		args = append(args, request.CloneOpts...)
 		if request.Depth == nil {

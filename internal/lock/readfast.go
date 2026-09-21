@@ -9,11 +9,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// The lock file is written by Write and read on every shell start, so it is decoded on the hot
-// path. Reading it through a general TOML decoder means building a map of the whole file and then
-// copying it into the struct with reflection, which costs more than rendering every plugin. This
-// reader understands just the schema Write emits and gives up on anything unfamiliar, leaving the
-// general decoder as the fallback.
+// The lock file is decoded on every shell start; this reader understands just the schema Write emits, giving up on anything unfamiliar so the general decoder can take over.
 
 // lockTable is the table keys are currently being assigned into.
 type lockTable int
@@ -34,8 +30,7 @@ type fastLockParser struct {
 	table  lockTable
 	// plugin is the index of the plugin the current table belongs to, or -1 before the first one.
 	plugin int
-	// The bit masks and flags below track what has been defined, because TOML rejects a table or
-	// key defined twice and this reader must not accept a file the decoder would reject.
+	// The bit masks and flags below track what has been defined, because TOML rejects a duplicate table or key.
 	rootFields      uint8
 	pluginFields    uint16
 	pluginHooksSeen bool
@@ -43,8 +38,7 @@ type fastLockParser struct {
 	templatesSeen   bool
 }
 
-// parseLockFast reads a lock file's own schema. The bool is false when the contents use something
-// this reader does not handle, which is the caller's cue to decode them as TOML instead.
+// parseLockFast reads a lock file's own schema, reporting false when the contents use something it does not handle.
 func parseLockFast(data []byte) (LockedConfig, bool) {
 	parser := fastLockParser{data: data, plugin: -1}
 	if !parser.parse() {
@@ -77,8 +71,7 @@ func (p *fastLockParser) parse() bool {
 	}
 }
 
-// skipWhitespace advances past spaces and tabs, and past line breaks when wanted. A carriage
-// return is only whitespace as part of a line ending, since TOML rejects a bare one.
+// skipWhitespace advances past spaces and tabs, and past line breaks when wanted; a bare carriage return is not whitespace.
 func (p *fastLockParser) skipWhitespace(lineBreaks bool) bool {
 	for p.pos < len(p.data) {
 		switch p.data[p.pos] {
@@ -193,8 +186,7 @@ func (p *fastLockParser) parseTableHeader() bool {
 	return true
 }
 
-// parseKey reads a key, which may be bare or quoted and may have dotted parts. It returns the name
-// with its parts joined, how many parts it had, and whether it read a key at all.
+// parseKey reads a bare or quoted key with dotted parts, returning the joined name, part count, and whether a key was read.
 func (p *fastLockParser) parseKey() (string, int, bool) {
 	var builder strings.Builder
 	parts := 0
@@ -357,8 +349,7 @@ func (p *fastLockParser) assignList(key string, parts int, items []string) bool 
 	return true
 }
 
-// claimPluginField records that a plugin key has been defined, reporting false for a key that is
-// unknown or already defined.
+// claimPluginField records that a plugin key has been defined, reporting false for an unknown or duplicate key.
 func (p *fastLockParser) claimPluginField(key string) bool {
 	bit, ok := pluginFieldBit(key)
 	if !ok || p.pluginFields&bit != 0 {

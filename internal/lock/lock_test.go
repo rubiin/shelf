@@ -388,8 +388,7 @@ func TestBuildSelectsConfiguredPluginFile(t *testing.T) {
 	}
 }
 
-// directoryOnlyInstaller installs a directory without pinning a single file, leaving file selection
-// to the `use` patterns.
+// directoryOnlyInstaller installs a directory without pinning a single file, leaving selection to `use`.
 type directoryOnlyInstaller struct{ directory string }
 
 func (installer directoryOnlyInstaller) Install(context.Context, source.Request) (source.Installed, error) {

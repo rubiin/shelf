@@ -241,8 +241,7 @@ func TestInstallerUsesGitSubdirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(installed.Directory, "sudo.plugin.zsh")); err != nil {
 		t.Fatalf("plugin file missing from installed directory: %v", err)
 	}
-	// Hostless local repository paths are cloned into the data directory, so the
-	// source root is the clone directory GitDirectory names, not the source path.
+	// Hostless local repository paths are cloned into the data directory, so the source root is the clone directory, not the source path.
 	wantRoot, err := GitDirectory(dataDir, Request{Git: repository})
 	if err != nil {
 		t.Fatal(err)
@@ -325,8 +324,7 @@ func TestGitDirectoryLayout(t *testing.T) {
 	}
 }
 
-// TestCloneURLMultiForgeProtocols verifies each forge shorthand builds the expected
-// clone URL, and that proto selects the scheme prefix for all of them.
+// TestCloneURLMultiForgeProtocols verifies each forge shorthand builds the expected clone URL, and that proto selects the scheme prefix for all of them.
 func TestCloneURLMultiForgeProtocols(t *testing.T) {
 	tests := []struct {
 		request Request
@@ -442,10 +440,7 @@ func TestInstallerDownloadsIntoTheSourceLayout(t *testing.T) {
 	}
 }
 
-// TestInstallerShallowClonesGitSources verifies that fresh installs fetch only the
-// requested ref's tip (or the remote default branch), so source repositories with long
-// histories aren't transferred wholesale. file:// URLs exercise the real shallow
-// transport: git ignores --depth for plain local-path clones.
+// TestInstallerShallowClonesGitSources verifies fresh installs fetch only the requested ref's tip, and that file:// URLs exercise the real shallow transport.
 func TestInstallerShallowClonesGitSources(t *testing.T) {
 	repository := t.TempDir()
 	if err := os.MkdirAll(repository, 0o755); err != nil {
@@ -489,9 +484,7 @@ func TestInstallerShallowClonesGitSources(t *testing.T) {
 	}
 }
 
-// TestInstallerHonorsPerPluginDepth verifies depth reaches git clone: unset keeps
-// the shallow depth-1 default, an explicit depth fetches that many ancestors, and
-// depth 0 clones full history (like zplug's depth:0).
+// TestInstallerHonorsPerPluginDepth verifies depth reaches git clone: unset keeps the shallow default, a depth fetches that many ancestors, and 0 clones full history.
 func TestInstallerHonorsPerPluginDepth(t *testing.T) {
 	repository := t.TempDir()
 	if err := os.MkdirAll(repository, 0o755); err != nil {
@@ -537,8 +530,7 @@ func TestInstallerHonorsPerPluginDepth(t *testing.T) {
 	}
 }
 
-// TestInstallerPassesCloneOptionsThrough verifies cloneopts reach git clone: a
-// --no-tags clone must have no tags while the default clone fetches them.
+// TestInstallerPassesCloneOptionsThrough verifies cloneopts reach git clone: a --no-tags clone has no tags while the default clone fetches them.
 func TestInstallerPassesCloneOptionsThrough(t *testing.T) {
 	repository := t.TempDir()
 	if err := os.MkdirAll(repository, 0o755); err != nil {
@@ -597,8 +589,7 @@ func TestInstallerFallsBackToFullCloneForPinnedRevision(t *testing.T) {
 	}
 }
 
-// commitFile commits contents to a file in the repository directory and returns the
-// resulting revision. It seeds a git repository on first use, like the CLI e2e helper.
+// commitFile commits contents to a file in the repository directory and returns the revision, seeding the git repository on first use.
 func commitFile(t *testing.T, directory, file, contents string) string {
 	t.Helper()
 	if _, err := os.Stat(filepath.Join(directory, ".git")); os.IsNotExist(err) {

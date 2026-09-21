@@ -49,8 +49,7 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 	// A rough output estimate saves the buffer from growing one chunk at a time.
 	output.Grow(64 * len(locked.Plugins))
 	for _, name := range sortedEnvironmentNames(locked.Env) {
-		// Assignments run in the current shell whether or not they are eval'd, so they are
-		// written directly rather than paying an extra parse pass per environment variable.
+		// Assignments run in the current shell, so they are written directly without an extra parse pass per variable.
 		output.WriteString(name)
 		output.WriteString("=")
 		output.WriteString(locked.Env[name])
@@ -82,9 +81,7 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 				}
 			}
 		}
-		// Each plugin is evaluated separately, so a whole-script `eval "$(shelf source)"`
-		// parses one plugin at a time and aliases from earlier plugins stay real for later
-		// ones.
+		// Each plugin is evaluated separately, so a whole-script `eval "$(shelf source)"` parses one plugin at a time and aliases stay real.
 		output.WriteString("eval ")
 		output.WriteString(quoteShell(pluginOutput.String()))
 		output.WriteString("\n")
@@ -115,17 +112,7 @@ func renderChunk(name, text string, current *scope, output *scriptBuffer) error 
 	return nil
 }
 
-// renderInline renders an inline plugin's text, which is a template in its own right. Bash and
-// zsh differ in how an eval'd multi-line string is read, which shapes the wrapper:
-//
-//   - bash reads an eval'd string a line at a time, so once `expand_aliases` is on (interactive
-//     shells set it) an alias is defined before the line that uses it is read; the rendered text
-//     is written straight into the per-plugin eval, which needs no helper at all.
-//   - zsh parses the whole eval'd string before running any of it, so an alias defined on one
-//     line is invisible when a function on a later line is parsed; feeding the text to `source`
-//     over stdin parses and executes it a line at a time instead. A quoted heredoc supplies the
-//     text without the process-substitution fork `source <(printf %s ...)` paid per inline
-//     plugin.
+// renderInline renders an inline plugin's text: bash evals it directly, while zsh sources it over stdin because zsh parses an eval'd string whole and would lose aliases defined on earlier lines.
 func renderInline(plugin lock.LockedPlugin, shell string, output *scriptBuffer) error {
 	before := output.Len()
 	current := pluginScope(PluginData{Name: plugin.Name, Hooks: plugin.Hooks})
@@ -149,9 +136,7 @@ func renderInline(plugin lock.LockedPlugin, shell string, output *scriptBuffer) 
 	return nil
 }
 
-// heredocDelimiter picks a heredoc end marker that cannot appear as a literal line of the text.
-// The delimiter is emitted through a quoted heredoc, so it only ever ends the heredoc when a full
-// line of the text equals it.
+// heredocDelimiter picks a heredoc end marker that cannot appear as a full line of the quoted-heredoc text.
 func heredocDelimiter(text string) string {
 	for index := 0; ; index++ {
 		delimiter := fmt.Sprintf("SHELF_%d", index)

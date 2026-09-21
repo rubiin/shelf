@@ -114,8 +114,7 @@ type scope struct {
 	filesReady bool
 	hooks      templateValue
 	hooksReady bool
-	// childScope is this scope's one loop scope, reused by every loop that has this scope as
-	// its parent: sibling loops run in sequence, so they can share the same child.
+	// childScope is this scope's one loop scope, reused by every loop sharing this parent.
 	childScope *scope
 }
 
@@ -165,8 +164,7 @@ func (s *scope) pluginValue(name string) (templateValue, bool) {
 	}
 }
 
-// child returns the loop scope for this scope, creating it once and reusing it for every loop
-// executed against this parent. A loop's iterations write into it, so nothing allocates per loop.
+// child returns this scope's one loop scope, creating it once so loop iterations allocate nothing.
 func (s *scope) child(names []string) *scope {
 	child := s.childScope
 	if child == nil {

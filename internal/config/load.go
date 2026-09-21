@@ -134,8 +134,7 @@ func usesGitSource(plugin RawPlugin) bool {
 	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }
 
-// usesForgeSource reports whether the plugin is a git, github, gist, gitlab,
-// bitbucket, or codeberg source, the shorthands for which proto picks a protocol.
+// usesForgeSource reports whether the plugin is a git, github, gist, gitlab, bitbucket, or codeberg source, the shorthands for which proto picks a protocol.
 func usesForgeSource(plugin RawPlugin) bool {
 	return plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }

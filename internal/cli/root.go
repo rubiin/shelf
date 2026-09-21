@@ -376,8 +376,7 @@ type sourceInputs struct {
 	Shell           string
 }
 
-// buildDiagnostics returns the writer build output streams to, or nil when quiet so
-// the lock discards it.
+// buildDiagnostics returns the writer build output streams to, or nil when quiet so the lock discards it.
 func buildDiagnostics(writer io.Writer) io.Writer {
 	if quiet {
 		return nil
@@ -408,8 +407,7 @@ func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) 
 	}, nil
 }
 
-// renderScript writes the shell code for a verified lock file, reporting each plugin when verbose.
-// The lock records the shell and the resolved templates, so rendering needs nothing from the config.
+// renderScript writes the shell code for a verified lock file; the lock records shell and templates, so rendering needs nothing from the config.
 func renderScript(output io.Writer, locked lock.LockedConfig, diagnostics io.Writer) error {
 	log := newLogger(diagnostics)
 	for _, plugin := range locked.Plugins {
@@ -427,8 +425,7 @@ func renderScript(output io.Writer, locked lock.LockedConfig, diagnostics io.Wri
 	return err
 }
 
-// fingerprintWithShell hashes the config bytes together with the shell override, so a lock taken under
-// a different SHELF_SHELL is stale even though the config file itself did not change.
+// fingerprintWithShell hashes the config bytes with the shell override, so a lock taken under a different SHELF_SHELL is stale.
 func fingerprintWithShell(contents []byte) string {
 	return lock.Fingerprint([]byte(lock.Fingerprint(contents) + "\n" + os.Getenv("SHELF_SHELL")))
 }
@@ -441,8 +438,7 @@ func fingerprintWithRevision(fingerprint, revisionPath string) string {
 	return lock.Fingerprint([]byte(fingerprint + "\n" + lock.Fingerprint(contents)))
 }
 
-// unlockedLock reads the lock and verifies it against the config's fingerprint without decoding the
-// config, which is the shell-startup path. A caller that gets false relocks through the full path.
+// unlockedLock reads the lock and verifies it against the config's fingerprint without decoding the config, the shell-startup path.
 func unlockedLock(paths Paths, lockPath string) (lock.LockedConfig, bool) {
 	contents, err := os.ReadFile(paths.ConfigFile)
 	if err != nil {
@@ -616,8 +612,7 @@ func splitEditorCommand(value string) ([]string, error) {
 	return arguments, nil
 }
 
-// sourceConfig prints shell code, reading a fresh lock file under a shared lock and only taking
-// the exclusive lock when it has to relock.
+// sourceConfig prints shell code, reading a fresh lock file under a shared lock and relocking exclusively only when needed.
 func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode lock.Mode, concurrency int) error {
 	lockPath := paths.LockFile(profile)
 	log := newLogger(diagnostics)
@@ -786,8 +781,7 @@ func pluginStatus(paths Paths, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// Check every git-sourced plugin's current revision in parallel, collecting
-	// results indexed by plugin position so output stays in declaration order.
+	// Check every git-sourced plugin's revision in parallel, indexed by position so output stays in declaration order.
 	plugins := locked.Plugins
 	states := make([]string, len(plugins))
 	var tasks []int

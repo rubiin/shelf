@@ -81,9 +81,7 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 	return locked, nil
 }
 
-// RunConcurrently runs work per index with at most concurrency workers, cancelling the rest on
-// failure. Callers that need every result (such as a status check that reports all plugins) can
-// simply never return an error, keeping all workers running to completion.
+// RunConcurrently runs work per index with at most concurrency workers, cancelling the rest on failure; callers needing every result simply never return an error.
 func RunConcurrently(count, concurrency int, work func(ctx context.Context, index int) error) error {
 	if concurrency < 1 {
 		return fmt.Errorf("concurrency must be at least 1")
@@ -166,8 +164,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	} else if installed.File != "" {
 		files = []string{installed.File}
 	} else {
-		// `use` lists every pattern to select from, while global matches stop at the first pattern
-		// that selects anything.
+		// `use` lists every pattern to select from, while global matches stop at the first pattern that selects anything.
 		patterns := plugin.Use
 		firstMatch := false
 		if len(patterns) == 0 {
@@ -192,9 +189,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}, nil
 }
 
-// runBuild executes each build command with the POSIX shell in the plugin's source
-// root (falling back to its selected directory). The command text is user content;
-// shelf builds only the argv, never a concatenated shell string.
+// runBuild executes each build command with the POSIX shell in the plugin's source root; shelf builds only the argv, never a concatenated shell string.
 func runBuild(ctx context.Context, diagnostics io.Writer, name string, installed source.Installed, commands []string) error {
 	if len(commands) == 0 {
 		return nil
@@ -218,8 +213,7 @@ func runBuild(ctx context.Context, diagnostics io.Writer, name string, installed
 	return nil
 }
 
-// Restore reinstalls the revisions the lock pinned, using only the lock so a caller that holds a
-// valid lock never parses the config. It runs through the same worker pool as locking.
+// Restore reinstalls the revisions the lock pinned, using only the lock and the same worker pool as locking.
 func Restore(locked LockedConfig, installer source.Installer, concurrency int) error {
 	var tasks []LockedPlugin
 	for _, plugin := range locked.Plugins {

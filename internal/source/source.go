@@ -29,8 +29,7 @@ type Request struct {
 	File      string
 	Update    bool
 	Reinstall bool
-	// CloneOpts are extra arguments passed to git clone; Depth sets --depth (nil keeps
-	// the shallow default, 0 clones full history).
+	// CloneOpts are extra arguments passed to git clone; Depth sets --depth (nil keeps the shallow default, 0 clones full history).
 	CloneOpts []string
 	Depth     *int
 }
@@ -126,8 +125,7 @@ func CloneDir(dataDir string) string { return filepath.Join(dataDir, "repos") }
 // DownloadDir is the directory remote sources are downloaded into.
 func DownloadDir(dataDir string) string { return filepath.Join(dataDir, "downloads") }
 
-// GitDirectory is a git source's clone directory: <clone dir>/<host>/<repo path>
-// out; a hostless source such as a local repository path keeps its path below the clone directory.
+// GitDirectory is a git source's clone directory: <clone dir>/<host>/<repo path>; a hostless source keeps its path below the clone directory.
 func GitDirectory(dataDir string, request Request) (string, error) {
 	rawURL := gitURL(request)
 	parsed, err := url.Parse(rawURL)
