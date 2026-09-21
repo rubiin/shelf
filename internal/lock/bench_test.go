@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func benchLock(tb testing.TB, plugins int) (string, LockedConfig) {
@@ -51,6 +53,22 @@ func BenchmarkReadLockFile(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, err := Read(path); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkDecodeLockFileToml measures the general decoder for comparison with the fast reader.
+func BenchmarkDecodeLockFileToml(b *testing.B) {
+	path, _ := benchLock(b, 120)
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		var locked LockedConfig
+		if err := toml.Unmarshal(contents, &locked); err != nil {
 			b.Fatal(err)
 		}
 	}

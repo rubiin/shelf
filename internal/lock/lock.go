@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 	"shelf/internal/config"
@@ -16,6 +18,15 @@ import (
 )
 
 const DefaultConcurrency = 8
+
+const (
+	// verifyParallelAt is the selected-file count above which verification runs wide.
+	verifyParallelAt = 16
+	// verifyConcurrency is the worker count used to check selected plugin files.
+	verifyConcurrency = 8
+)
+
+var errFileMissing = errors.New("selected plugin file is missing")
 
 // fingerprint returns the supplied config fingerprint, or computes it from ConfigFile.
 func (ctx Context) fingerprint() string {
@@ -264,12 +275,9 @@ func Write(path string, locked LockedConfig) error {
 	return os.Rename(temporaryName, path)
 }
 
+// Read decodes a lock file, using the schema-specific reader when the contents match it.
 func Read(path string) (LockedConfig, error) {
-	var locked LockedConfig
-	if _, err := toml.DecodeFile(path, &locked); err != nil {
-		return LockedConfig{}, err
-	}
-	return locked, nil
+	return readLockFile(path)
 }
 
 func Verify(path string, ctx Context) (bool, error) {
@@ -289,14 +297,44 @@ func VerifyLocked(locked LockedConfig, ctx Context) bool {
 	if locked.Profile != ctx.Profile || locked.Shell != ctx.Shell || locked.ConfigFingerprint != ctx.fingerprint() {
 		return false
 	}
+	return selectedFilesExist(locked)
+}
+
+// selectedFilesExist reports whether every selected plugin file is still installed.
+func selectedFilesExist(locked LockedConfig) bool {
+	total := 0
 	for _, plugin := range locked.Plugins {
-		for _, file := range plugin.Files {
-			if _, err := os.Stat(file); err != nil {
+		total += len(plugin.Files)
+	}
+	if total == 0 {
+		return true
+	}
+	files := make([]string, 0, total)
+	for _, plugin := range locked.Plugins {
+		files = append(files, plugin.Files...)
+	}
+	// A few stats are quicker inline; a shell with many plugins is quicker in parallel.
+	if total < verifyParallelAt {
+		for _, file := range files {
+			if !exists(file) {
 				return false
 			}
 		}
+		return true
 	}
-	return true
+	missing := runConcurrently(total, verifyConcurrency, func(_ context.Context, index int) error {
+		if exists(files[index]) {
+			return nil
+		}
+		return errFileMissing
+	})
+	return missing == nil
+}
+
+// exists reports whether a path exists, without allocating a FileInfo for every check.
+func exists(path string) bool {
+	var status syscall.Stat_t
+	return syscall.Stat(path, &status) == nil
 }
 
 // Fingerprint returns the config fingerprint recorded in lock files.

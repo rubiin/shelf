@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("config_fingerprint = \"000\"\nprofile = \"0000\"\nshell = \"000\" \n[[plugins]]\n  name = \"000000\"\n  inline = \"000000000\" \n[[plugins]]\n  name = \"000000\"\n  [plugins.hooks]\n   00000= \"00000000\" \n[[plugins]]\n  name = \"00000\"\n  directory = \"0000\"\n  files= \"\" ")
