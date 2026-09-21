@@ -26,6 +26,31 @@ func TestLoadAndValidatePluginSources(t *testing.T) {
 	}
 }
 
+func TestLoadAndValidateEnvironmentAssignments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[env]\nZSH_THEME = \"robbyrussell\"\nplugins = \"(git npm macos)\"\n\n[plugins.demo]\ninline = \"echo demo\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Env["ZSH_THEME"] != "robbyrussell" || cfg.Env["plugins"] != "(git npm macos)" {
+		t.Fatalf("environment = %v", cfg.Env)
+	}
+}
+
+func TestValidateRejectsInvalidEnvironmentName(t *testing.T) {
+	cfg := Config{Env: map[string]string{"NOT-VALID": "value"}, Plugins: map[string]RawPlugin{"demo": {Inline: "echo demo"}}}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "environment variable") {
+		t.Fatalf("invalid environment name error = %v", err)
+	}
+}
+
 func TestValidateRejectsMultipleSources(t *testing.T) {
 	cfg := Config{Plugins: map[string]RawPlugin{"bad": {GitHub: "a/b", Remote: "https://example.test/x"}}}
 	if err := Validate(cfg); err == nil {

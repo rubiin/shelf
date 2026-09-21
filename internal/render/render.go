@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"shelf/internal/lock"
@@ -47,6 +48,11 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 	var output scriptBuffer
 	// A rough output estimate saves the buffer from growing one chunk at a time.
 	output.Grow(64 * len(locked.Plugins))
+	for _, name := range sortedEnvironmentNames(locked.Env) {
+		output.WriteString("eval ")
+		output.WriteString(quoteShell(name + "=" + locked.Env[name] + "\n"))
+		output.WriteString("\n")
+	}
 	// One plugin scope is reused for the whole script: it is reset per plugin, not reallocated.
 	var current scope
 	for _, plugin := range locked.Plugins {
@@ -78,6 +84,15 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 		output.WriteString("\n")
 	}
 	return output.String(), nil
+}
+
+func sortedEnvironmentNames(environment map[string]string) []string {
+	names := make([]string, 0, len(environment))
+	for name := range environment {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func quoteShell(text string) string {

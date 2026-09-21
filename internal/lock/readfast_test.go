@@ -24,6 +24,7 @@ func TestFastReadMatchesTomlDecode(t *testing.T) {
 		ConfigFingerprint: "c0b375d8b66872df321a3d6f450f1631c5e2bb687c0eac25bf581d23066b54a6",
 		Profile:           "work",
 		Shell:             "bash",
+		Env:               map[string]string{"PROMPT": "'$ '"},
 		Templates: map[string]string{
 			"source": "{{ hooks?.pre | nl }}{% for file in files %}source \"{{ file }}\"\n{% endfor %}",
 			"PATH":   `export PATH="{{ dir }}:$PATH"`,
@@ -111,6 +112,10 @@ func TestFastReadHandlesEveryWrittenLock(t *testing.T) {
 		"templates only": {
 			Shell:     "bash",
 			Templates: map[string]string{"source": "source {{ file }}\n"},
+		},
+		"environment only": {
+			Shell: "zsh",
+			Env:   map[string]string{"ZSH_THEME": "robbyrussell"},
 		},
 		"empty file list": {
 			Shell:   "zsh",

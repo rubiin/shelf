@@ -4,6 +4,7 @@ type Config struct {
 	Shell       Shell                `toml:"shell"`
 	Matches     []string             `toml:"match"`
 	Apply       []string             `toml:"apply"`
+	Env         map[string]string    `toml:"env"`
 	Templates   map[string]string    `toml:"templates"`
 	Plugins     map[string]RawPlugin `toml:"plugins"`
 	PluginOrder []string             `toml:"-"`

@@ -205,6 +205,9 @@ Basic plugin sources:
 ```toml
 shell = "zsh"
 
+[env]
+ZSH_THEME = "robbyrussell"
+
 [plugins.git-plugin]
 git = "https://github.com/example/plugin.git"
 branch = "main"
@@ -222,6 +225,9 @@ optional = true
 
 [plugins.inline-plugin]
 inline = "echo loaded"
+
+[plugins.oh-my-zsh]
+github = "ohmyzsh/ohmyzsh"
 ```
 
 Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, and
@@ -229,6 +235,10 @@ Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, and
 (the default), `git`, or `ssh`. `shelf add --proto ssh` writes the same field.
 `use` accepts recursive glob patterns relative to the installed plugin
 directory.
+
+The optional `[env]` table is rendered before every plugin. Its keys must be
+shell variable names; its string values are shell assignment right-hand sides,
+so arrays can be written as `plugins = "(git npm macos)"`.
 
 A plugin that sets `optional = true` must use a `local` source. Shelf skips it
 when its path does not exist. A plugin that sets `profiles` only loads while one of those profiles is

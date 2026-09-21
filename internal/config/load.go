@@ -58,6 +58,11 @@ func Validate(cfg Config) error {
 	if cfg.Shell != "" && cfg.Shell != Bash && cfg.Shell != Zsh {
 		return fmt.Errorf("unsupported shell: %q", cfg.Shell)
 	}
+	for name := range cfg.Env {
+		if !validEnvironmentName(name) {
+			return fmt.Errorf("invalid environment variable %q", name)
+		}
+	}
 	for name, plugin := range cfg.Plugins {
 		if name == "" {
 			return fmt.Errorf("plugin name is empty")
@@ -97,6 +102,19 @@ func Validate(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func validEnvironmentName(name string) bool {
+	if name == "" || name[0] != '_' && (name[0] < 'A' || name[0] > 'Z') && (name[0] < 'a' || name[0] > 'z') {
+		return false
+	}
+	for index := 1; index < len(name); index++ {
+		character := name[index]
+		if character != '_' && (character < 'A' || character > 'Z') && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // validateInlinePlugin rejects the fields an inline plugin cannot use.

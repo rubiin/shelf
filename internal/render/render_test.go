@@ -21,6 +21,23 @@ func TestScriptSourcesLockedFiles(t *testing.T) {
 	}
 }
 
+func TestScriptAssignsEnvironmentBeforePlugins(t *testing.T) {
+	script, err := Script(lock.LockedConfig{
+		Env:     map[string]string{"plugins": "(git npm macos)", "ZSH_THEME": "robbyrussell"},
+		Plugins: []lock.LockedPlugin{{Name: "demo", Inline: "print -r -- \"$ZSH_THEME:$plugins\""}},
+	}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("zsh", "-fc", `eval "$1"`, "shelf-test", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "robbyrussell:git npm macos\n" {
+		t.Fatalf("zsh output = %q", output)
+	}
+}
+
 func TestScriptRendersHooksAroundTheSourcedFiles(t *testing.T) {
 	// The built-in source template renders the hook map inside the apply template, pre before post.
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{

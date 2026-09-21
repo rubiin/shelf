@@ -20,10 +20,11 @@ const (
 )
 
 type LockedConfig struct {
-	ConfigFingerprint string         `toml:"config_fingerprint"`
-	Profile           string         `toml:"profile"`
-	Shell             string         `toml:"shell"`
-	Plugins           []LockedPlugin `toml:"plugins"`
+	ConfigFingerprint string            `toml:"config_fingerprint"`
+	Profile           string            `toml:"profile"`
+	Shell             string            `toml:"shell"`
+	Env               map[string]string `toml:"env,omitempty"`
+	Plugins           []LockedPlugin    `toml:"plugins"`
 	// Templates must stay last: TOML tables and arrays of tables end the preceeding table.
 	Templates map[string]string `toml:"templates,omitempty"`
 }

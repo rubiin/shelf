@@ -20,6 +20,7 @@ type lockTable int
 
 const (
 	tableRoot lockTable = iota
+	tableEnv
 	tablePlugin
 	tableHooks
 	tableTemplates
@@ -38,6 +39,7 @@ type fastLockParser struct {
 	rootFields      uint8
 	pluginFields    uint16
 	pluginHooksSeen bool
+	envSeen         bool
 	templatesSeen   bool
 }
 
@@ -154,6 +156,15 @@ func (p *fastLockParser) parseTableHeader() bool {
 		return true
 	}
 	switch name {
+	case "env":
+		if parts != 1 || p.envSeen {
+			return false
+		}
+		p.table = tableEnv
+		p.envSeen = true
+		if p.locked.Env == nil {
+			p.locked.Env = map[string]string{}
+		}
 	case "plugins":
 		// The encoder writes the array of tables form, so this is not a lock file it wrote.
 		return false
@@ -295,6 +306,14 @@ func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 			// files and apply are lists, so a string here is a different value, not this field.
 			return false
 		}
+	case tableEnv:
+		if parts != 1 {
+			return false
+		}
+		if _, exists := p.locked.Env[key]; exists {
+			return false
+		}
+		p.locked.Env[key] = text
 	case tableHooks:
 		// A dotted key would nest a table where a string is expected, which the decoder rejects.
 		if parts != 1 {

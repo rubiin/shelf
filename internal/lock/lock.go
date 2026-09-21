@@ -41,7 +41,7 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 }
 
 func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Installer, mode Mode, concurrency int) (LockedConfig, error) {
-	locked := LockedConfig{ConfigFingerprint: ctx.fingerprint(), Profile: ctx.Profile, Shell: ctx.Shell, Templates: ctx.Templates}
+	locked := LockedConfig{ConfigFingerprint: ctx.fingerprint(), Profile: ctx.Profile, Shell: ctx.Shell, Env: cfg.Env, Templates: ctx.Templates}
 	type task struct {
 		name   string
 		plugin config.RawPlugin

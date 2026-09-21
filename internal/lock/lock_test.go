@@ -96,6 +96,20 @@ func TestBuildRejectsNonPositiveConcurrency(t *testing.T) {
 	}
 }
 
+func TestBuildRecordsEnvironmentAssignments(t *testing.T) {
+	cfg := config.Config{
+		Env:     map[string]string{"ZSH_THEME": "robbyrussell"},
+		Plugins: map[string]config.RawPlugin{"demo": {Inline: "echo demo"}},
+	}
+	locked, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir()}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked.Env["ZSH_THEME"] != "robbyrussell" {
+		t.Fatalf("locked environment = %v", locked.Env)
+	}
+}
+
 func TestBuildOmitsMissingOptionalLocalPlugin(t *testing.T) {
 	cfg := config.Config{Plugins: map[string]config.RawPlugin{
 		"optional": {Local: filepath.Join(t.TempDir(), "missing"), Optional: true},
