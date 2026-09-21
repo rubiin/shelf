@@ -67,3 +67,10 @@ apply = ["defer"]
 # github = "owner/myrepo"
 # depth = 0
 # cloneopts = ["--single-branch", "--filter=blob:none"]
+
+# Install-time build hooks run in the repository root on every lock build, before
+# file selection, so generated files can be sourced:
+# [plugins.fzf]
+# github = "junegunn/fzf"
+# build = ["make install"]
+# dir = "shell"

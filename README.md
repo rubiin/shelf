@@ -246,7 +246,7 @@ github = "ohmyzsh/ohmyzsh"
 a Git URL or local Git repository. `remote` downloads one file. `local` uses an
 existing file or directory, and `inline` stores shell code directly in TOML.
 
-Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, `proto`,
+Plugin options include `use`, `apply`, `profiles`, `hooks`, `build`, `dir`, `file`, `proto`,
 `cloneopts`, and `depth`. `proto` selects the protocol for forge sources (`github`,
 `gist`, `gitlab`, `bitbucket`, `codeberg`): `https`, `git`, or `ssh`. `shelf add
 --proto ssh` writes the same field. `use`
@@ -268,6 +268,23 @@ cloneopts = ["--single-branch", "--filter=blob:none"]
 --reinstall` or `shelf source --relock` to re-clone an already installed source
 with new options. Both are recorded in the runtime lock, so reinstalls keep the
 exact clone behavior.
+
+A plugin that needs a compile or generation step before its shell files can be
+sourced sets `build` to a list of shell commands, run in the repository root when
+the lock is built (fresh install, update, reinstall, or a stale relock from
+`shelf source`). File selection runs afterward, so `use` globs can pick up
+generated files. Build output goes to stderr and is suppressed by `--quiet`; a
+non-zero exit fails the lock. `build` requires a directory source — it is
+rejected on `inline` and `remote` sources — and applies only to plugins active in
+the selected profile.
+
+```toml
+[plugins.fzf]
+github = "junegunn/fzf"
+build = ["make install"]
+dir = "shell"
+use = ["*.bash", "*.zsh"]
+```
 
 The optional `[env]` table is rendered before every plugin. Its keys must be
 shell variable names; its string values are shell assignment right-hand sides,
