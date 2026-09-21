@@ -1259,3 +1259,24 @@ func TestSourceRelocksWhenTheShellOverrideChanges(t *testing.T) {
 		t.Fatalf("shell after dropping the override = %q, want zsh", relocked.Shell)
 	}
 }
+
+func TestAddWritesBuildCommands(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"add", "demo", "--local", filepath.Join(directory, "plugin"), "--build", "make", "--build", "cargo build"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), `build = ["make", "cargo build"]`) {
+		t.Fatalf("config = %s", contents)
+	}
+}

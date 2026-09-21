@@ -217,7 +217,7 @@ func NewRoot() *cobra.Command {
 	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
-	var addUse, addApply, addProfiles, addCloneOpts []string
+	var addUse, addApply, addBuild, addProfiles, addCloneOpts []string
 	var addHooks map[string]string
 	var addDepth int
 	addCommand := &cobra.Command{
@@ -230,7 +230,7 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
 			})
 		},
 	}
@@ -254,6 +254,7 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addFile, "file", "", "plugin file")
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
 	addCommand.Flags().StringSliceVar(&addApply, "apply", nil, "template names")
+	addCommand.Flags().StringArrayVar(&addBuild, "build", nil, "install-time build commands")
 	addCommand.Flags().StringSliceVar(&addProfiles, "profiles", nil, "plugin profiles")
 	addCommand.Flags().StringSliceVar(&addCloneOpts, "cloneopts", nil, "extra git clone arguments")
 	addCommand.Flags().IntVar(&addDepth, "depth", 0, "git clone depth; 0 clones full history")

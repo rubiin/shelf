@@ -31,6 +31,7 @@ type RawPlugin struct {
 	File     string            `toml:"file"`
 	Use      []string          `toml:"use"`
 	Apply    []string          `toml:"apply"`
+	Build    []string          `toml:"build"`
 	Profiles []string          `toml:"profiles"`
 	Hooks    map[string]string `toml:"hooks"`
 	// CloneOpts are extra arguments passed to git clone for git, github, and gist sources.

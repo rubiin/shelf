@@ -113,6 +113,19 @@ func Validate(cfg Config) error {
 				return err
 			}
 		}
+		if len(plugin.Build) > 0 {
+			if plugin.Inline != "" {
+				return fmt.Errorf("plugin %q cannot set build for an inline plugin", name)
+			}
+			if plugin.Remote != "" {
+				return fmt.Errorf("plugin %q cannot set build for a remote source", name)
+			}
+			for _, command := range plugin.Build {
+				if command == "" {
+					return fmt.Errorf("plugin %q has an empty build command", name)
+				}
+			}
+		}
 	}
 	return nil
 }
