@@ -1,10 +1,13 @@
 package lock
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -486,5 +489,82 @@ func TestBuildUnionsEveryUsePattern(t *testing.T) {
 	want := []string{filepath.Join(directory, "demo.extra.sh"), filepath.Join(directory, "demo.plugin.zsh")}
 	if len(locked.Plugins) != 1 || !slices.Equal(locked.Plugins[0].Files, want) {
 		t.Fatalf("selected files = %v, want %v", locked.Plugins[0].Files, want)
+	}
+}
+
+type buildInstaller struct {
+	directory string
+	root      string
+}
+
+func (installer buildInstaller) Install(_ context.Context, _ source.Request) (source.Installed, error) {
+	return source.Installed{Directory: installer.directory, Root: installer.root}, nil
+}
+
+func TestBuildRunsBeforeFileSelection(t *testing.T) {
+	directory := t.TempDir()
+	ctx := Context{Shell: "zsh", Templates: map[string]string{"source": "source \"{{ file }}\""}, Diagnostics: io.Discard}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: directory, Build: []string{"touch generated.zsh"}, Use: []string{"generated.zsh"}},
+	}}
+	locked, err := Build(ctx, cfg, buildInstaller{directory: directory, root: directory}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || len(locked.Plugins[0].Files) != 1 || filepath.Base(locked.Plugins[0].Files[0]) != "generated.zsh" {
+		t.Fatalf("locked plugins = %+v, want the generated file selected", locked.Plugins)
+	}
+}
+
+func TestBuildRunsInTheSourceRootNotTheSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	pluginDirectory := filepath.Join(root, "plugins", "demo")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := Context{Shell: "zsh", Templates: map[string]string{"source": "source \"{{ file }}\""}, Diagnostics: nil}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: root, Dir: "plugins/demo", Build: []string{"printf '%s' \"$PWD\" > built-from.txt"}},
+	}}
+	locked, err := Build(ctx, cfg, buildInstaller{directory: pluginDirectory, root: root}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(root, "built-from.txt"))
+	if readErr != nil {
+		t.Fatalf("build did not write in the source root: %v", readErr)
+	}
+	if string(contents) != root {
+		t.Fatalf("build ran in %q, want the source root %q", contents, root)
+	}
+	if len(locked.Plugins) != 1 {
+		t.Fatalf("locked plugins = %+v", locked.Plugins)
+	}
+}
+
+func TestBuildFailureFailsTheLock(t *testing.T) {
+	directory := t.TempDir()
+	ctx := Context{Shell: "zsh"}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: directory, Build: []string{"exit 1"}},
+	}}
+	_, err := Build(ctx, cfg, buildInstaller{directory: directory, root: directory}, ModeNormal)
+	if err == nil || !strings.Contains(err.Error(), `build plugin "demo"`) {
+		t.Fatalf("error = %v, want a build failure naming the plugin", err)
+	}
+}
+
+func TestBuildOutputStreamsToDiagnostics(t *testing.T) {
+	directory := t.TempDir()
+	var diagnostics bytes.Buffer
+	ctx := Context{Shell: "zsh", Diagnostics: &diagnostics}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: directory, Build: []string{"echo built-here"}},
+	}}
+	if _, err := Build(ctx, cfg, buildInstaller{directory: directory, root: directory}, ModeNormal); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diagnostics.String(), "built-here") {
+		t.Fatalf("diagnostics = %q, want the build output", diagnostics.String())
 	}
 }

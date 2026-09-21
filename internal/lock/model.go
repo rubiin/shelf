@@ -1,5 +1,7 @@
 package lock
 
+import "io"
+
 type Context struct {
 	ConfigFile string
 	// ConfigFingerprint lets callers that already read the config skip a second read.
@@ -9,6 +11,8 @@ type Context struct {
 	Shell             string
 	// Templates are the resolved apply templates, recorded so rendering needs no config read.
 	Templates map[string]string
+	// Diagnostics receives build hook output; nil discards it.
+	Diagnostics io.Writer
 }
 
 type Mode int
