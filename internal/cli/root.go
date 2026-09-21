@@ -190,6 +190,7 @@ func NewRoot() *cobra.Command {
 		},
 	})
 	var addGitHub, addGit, addGist, addRemote, addLocal, addInline string
+	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
 	var addUse, addApply, addProfiles []string
 	var addHooks map[string]string
@@ -199,7 +200,7 @@ func NewRoot() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks})
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks})
 			})
 		},
 	}
@@ -208,6 +209,7 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addGist, "gist", "", "GitHub Gist")
 	addCommand.Flags().StringVar(&addRemote, "remote", "", "remote URL")
 	addCommand.Flags().StringVar(&addLocal, "local", "", "local path")
+	addCommand.Flags().BoolVar(&addOptional, "optional", false, "skip a missing local plugin")
 	addCommand.Flags().StringVar(&addInline, "inline", "", "inline plugin content")
 	addCommand.Flags().StringVar(&addRev, "rev", "", "Git revision")
 	addCommand.Flags().StringVar(&addBranch, "branch", "", "Git branch")

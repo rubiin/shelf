@@ -60,6 +60,24 @@ func TestScriptMakesAliasesAvailableAcrossPluginsWhenEvaluated(t *testing.T) {
 	}
 }
 
+func TestScriptMakesInlineAliasesAvailableToInlineFunctions(t *testing.T) {
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:   "inline",
+		Inline: "alias aliastest='echo aliastest'\nfunctest() { aliastest; }\nfunctest\n",
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := exec.Command("zsh", "-fc", `eval "$1"`, "shelf-test", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "aliastest\n" {
+		t.Fatalf("zsh output = %q, want %q", output, "aliastest\n")
+	}
+}
+
 func TestBuiltinTemplates(t *testing.T) {
 	bash := BuiltinTemplates("bash")
 	if bash["PATH"] != "export PATH=\"{{ dir }}:$PATH\"" {
@@ -360,7 +378,7 @@ func TestScriptRendersInlinePluginThroughTheTemplateEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "eval 'echo greeting\necho pre\necho post\n'\n"; script != want {
+	if want := "eval 'source <(printf %s '\\''echo greeting\necho pre\necho post\n'\\'')\n'\n"; script != want {
 		t.Fatalf("script = %q, want %q", script, want)
 	}
 }

@@ -75,6 +75,17 @@ func TestValidateChecksProto(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsOptionalLocalPluginsOnly(t *testing.T) {
+	valid := Config{Plugins: map[string]RawPlugin{"local": {Local: "/missing/plugin", Optional: true}}}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("optional local plugin was rejected: %v", err)
+	}
+	invalid := Config{Plugins: map[string]RawPlugin{"remote": {Remote: "https://example.test/plugin.zsh", Optional: true}}}
+	if err := Validate(invalid); err == nil || !strings.Contains(err.Error(), "optional") {
+		t.Fatalf("optional remote plugin error = %v", err)
+	}
+}
+
 func TestLoadPreservesPluginDeclarationOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	contents := "[plugins.zsh-defer]\ninline = \"echo defer\"\n\n[plugins.zsh-vi-mode]\ninline = \"echo vi\"\n\n[plugins.powerlevel10k]\ninline = \"echo prompt\"\n"

@@ -216,6 +216,10 @@ remote = "https://example.com/plugin.zsh"
 [plugins.local-plugin]
 local = "/path/to/plugins"
 
+[plugins.optional-local-plugin]
+local = "/path/to/optional-plugin"
+optional = true
+
 [plugins.inline-plugin]
 inline = "echo loaded"
 ```
@@ -226,7 +230,8 @@ Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, and
 `use` accepts recursive glob patterns relative to the installed plugin
 directory.
 
-A plugin that sets `profiles` only loads while one of those profiles is
+A plugin that sets `optional = true` must use a `local` source. Shelf skips it
+when its path does not exist. A plugin that sets `profiles` only loads while one of those profiles is
 selected by `--profile` or `SHELF_PROFILE`; a plugin without `profiles` always
 loads.
 

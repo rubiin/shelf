@@ -96,6 +96,19 @@ func TestBuildRejectsNonPositiveConcurrency(t *testing.T) {
 	}
 }
 
+func TestBuildOmitsMissingOptionalLocalPlugin(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"optional": {Local: filepath.Join(t.TempDir(), "missing"), Optional: true},
+	}}
+	locked, err := Build(Context{Shell: "zsh"}, cfg, source.NewInstaller(t.TempDir()), ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 0 {
+		t.Fatalf("locked plugins = %+v, want none", locked.Plugins)
+	}
+}
+
 func TestRestoreInstallsRevisionsInParallel(t *testing.T) {
 	locked := LockedConfig{Plugins: []LockedPlugin{
 		{Name: "first", URL: "https://github.com/rubiin/first", Rev: "aaaaaaaa"},

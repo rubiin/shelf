@@ -1,6 +1,7 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,9 @@ func installLocal(request Request) (Installed, error) {
 	}
 	info, err := os.Stat(localPath)
 	if err != nil {
+		if request.Optional && errors.Is(err, os.ErrNotExist) {
+			return Installed{Skipped: true}, nil
+		}
 		return Installed{}, fmt.Errorf("local source: %w", err)
 	}
 	if info.IsDir() {

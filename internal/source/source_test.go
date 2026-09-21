@@ -129,6 +129,30 @@ func TestInstallerExpandsLocalEnvironmentPath(t *testing.T) {
 	}
 }
 
+func TestInstallerSkipsMissingOptionalLocalSource(t *testing.T) {
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{
+		Name:     "optional",
+		Local:    filepath.Join(t.TempDir(), "missing"),
+		Optional: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !installed.Skipped {
+		t.Fatal("missing optional local source was not skipped")
+	}
+}
+
+func TestInstallerRejectsMissingRequiredLocalSource(t *testing.T) {
+	_, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{
+		Name:  "required",
+		Local: filepath.Join(t.TempDir(), "missing"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("missing required local source error = %v", err)
+	}
+}
+
 func TestInstallerPropagatesRequestContext(t *testing.T) {
 	type contextKey struct{}
 	ctx := context.WithValue(context.Background(), contextKey{}, "marker")

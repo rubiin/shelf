@@ -18,6 +18,7 @@ type Request struct {
 	Proto     string
 	Remote    string
 	Local     string
+	Optional  bool
 	Ref       string
 	Branch    string
 	Tag       string
@@ -52,6 +53,7 @@ type Installed struct {
 	Directory string
 	File      string
 	Revision  string
+	Skipped   bool
 }
 
 type Installer interface {

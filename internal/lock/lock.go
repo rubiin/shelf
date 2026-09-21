@@ -66,7 +66,12 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 	if err != nil {
 		return LockedConfig{}, err
 	}
-	locked.Plugins = plugins
+	locked.Plugins = plugins[:0]
+	for _, plugin := range plugins {
+		if plugin.Name != "" {
+			locked.Plugins = append(locked.Plugins, plugin)
+		}
+	}
 	return locked, nil
 }
 
@@ -130,11 +135,14 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	}
 	installed, err := installer.Install(installContext, source.Request{
 		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto, Remote: plugin.Remote,
-		Local: plugin.Local, Ref: plugin.Rev, Branch: plugin.Branch,
+		Local: plugin.Local, Optional: plugin.Optional, Ref: plugin.Rev, Branch: plugin.Branch,
 		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
 	})
 	if err != nil {
 		return LockedPlugin{}, fmt.Errorf("install plugin %q: %w", name, err)
+	}
+	if installed.Skipped {
+		return LockedPlugin{}, nil
 	}
 	var files []string
 	if plugin.File != "" {

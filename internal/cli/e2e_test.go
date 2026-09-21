@@ -977,7 +977,7 @@ func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
 	if err := Execute([]string{"source"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "eval 'echo demo\n'\n" {
+	if output.String() != "eval 'source <(printf %s '\\''echo demo\n'\\'')\n'\n" {
 		t.Fatalf("source output = %q", output.String())
 	}
 }

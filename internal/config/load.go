@@ -71,6 +71,9 @@ func Validate(cfg Config) error {
 		if sources != 1 {
 			return fmt.Errorf("plugin %q must have exactly one source", name)
 		}
+		if plugin.Optional && plugin.Local == "" {
+			return fmt.Errorf("plugin %q can only set optional for a local source", name)
+		}
 		if plugin.Remote != "" {
 			parsed, err := url.Parse(plugin.Remote)
 			if err != nil || parsed.Scheme == "" || parsed.Host == "" {

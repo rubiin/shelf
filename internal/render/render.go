@@ -98,9 +98,14 @@ func renderChunk(name, text string, current *scope, output *scriptBuffer) error 
 func renderInline(plugin lock.LockedPlugin, output *scriptBuffer) error {
 	before := output.Len()
 	current := pluginScope(PluginData{Name: plugin.Name, Hooks: plugin.Hooks})
-	if err := renderCompiledTemplate(plugin.Name, plugin.Inline, current, output); err != nil {
+	var rendered scriptBuffer
+	if err := renderCompiledTemplate(plugin.Name, plugin.Inline, current, &rendered); err != nil {
 		return err
 	}
+	finishChunk(0, &rendered)
+	output.WriteString("source <(printf %s ")
+	output.WriteString(quoteShell(rendered.String()))
+	output.WriteString(")")
 	finishChunk(before, output)
 	return nil
 }
