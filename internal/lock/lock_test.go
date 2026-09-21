@@ -13,13 +13,17 @@ import (
 )
 
 type testInstaller struct {
-	directory string
-	lastDir   *string
+	directory   string
+	lastDir     *string
+	lastRequest *source.Request
 }
 
 func (installer testInstaller) Install(_ context.Context, request source.Request) (source.Installed, error) {
 	if installer.lastDir != nil {
 		*installer.lastDir = request.Dir
+	}
+	if installer.lastRequest != nil {
+		*installer.lastRequest = request
 	}
 	return source.Installed{
 		Directory: installer.directory,
@@ -245,6 +249,49 @@ func TestBuildRecordsGitPluginSourceAndRevision(t *testing.T) {
 	}
 	if plugin.Rev != "53a26e287fbbe2dcebb3aa1801546c6de32416fa" {
 		t.Fatalf("rev = %q", plugin.Rev)
+	}
+}
+
+func TestBuildPassesCloneOptionsAndDepthToInstaller(t *testing.T) {
+	depth := 2
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "romkatv/zsh-defer", CloneOpts: []string{"--single-branch"}, Depth: &depth},
+	}}
+	var request source.Request
+	locked, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir(), lastRequest: &request}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 {
+		t.Fatalf("locked plugins = %+v", locked.Plugins)
+	}
+	if len(request.CloneOpts) != 1 || request.CloneOpts[0] != "--single-branch" {
+		t.Fatalf("installer cloneopts = %v", request.CloneOpts)
+	}
+	if request.Depth == nil || *request.Depth != 2 {
+		t.Fatalf("installer depth = %v, want 2", request.Depth)
+	}
+	// The lock records them so Restore reinstalls with the same clone behavior.
+	plugin := locked.Plugins[0]
+	if len(plugin.CloneOpts) != 1 || plugin.CloneOpts[0] != "--single-branch" {
+		t.Fatalf("locked cloneopts = %v", plugin.CloneOpts)
+	}
+	if plugin.Depth == nil || *plugin.Depth != 2 {
+		t.Fatalf("locked depth = %v, want 2", plugin.Depth)
+	}
+	// A depth of 0 must survive a lock write/read round trip.
+	zero := 0
+	locked.Plugins[0].Depth = &zero
+	path := filepath.Join(t.TempDir(), "plugins.lock")
+	if err := Write(path, locked); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Plugins[0].Depth == nil || *reloaded.Plugins[0].Depth != 0 {
+		t.Fatalf("round-tripped depth = %v, want 0", reloaded.Plugins[0].Depth)
 	}
 }
 

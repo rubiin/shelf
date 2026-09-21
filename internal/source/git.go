@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -35,8 +36,17 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		// shell plugins need. A depth-limited clone can't always reach a bare commit
 		// SHA pinned with `rev` — the server must choose to serve it (e.g. GitHub's
 		// allowReachableSHA1InWant) — so fall back to the full clone when the cheap
-		// attempt fails, rather than risking a broken install.
-		args := []string{"clone", "--depth", "1", "--recurse-submodules"}
+		// attempt fails, rather than risking a broken install. Per-plugin cloneopts
+		// pass through to git clone, and depth overrides the shallow default (0 is a
+		// full clone, like zplug's depth:0).
+		args := []string{"clone"}
+		args = append(args, request.CloneOpts...)
+		if request.Depth == nil {
+			args = append(args, "--depth", "1")
+		} else if *request.Depth > 0 {
+			args = append(args, "--depth", strconv.Itoa(*request.Depth))
+		}
+		args = append(args, "--recurse-submodules")
 		if ref != "" {
 			args = append(args, "--branch", ref)
 		}
@@ -45,7 +55,9 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 			if err := os.RemoveAll(directory); err != nil {
 				return Installed{}, err
 			}
-			args := []string{"clone", "--recurse-submodules", "--", repositoryURL, directory}
+			args := []string{"clone"}
+			args = append(args, request.CloneOpts...)
+			args = append(args, "--recurse-submodules", "--", repositoryURL, directory)
 			if err := runGit(ctx, args...); err != nil {
 				return Installed{}, err
 			}

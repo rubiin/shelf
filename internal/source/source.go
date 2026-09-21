@@ -26,6 +26,10 @@ type Request struct {
 	File      string
 	Update    bool
 	Reinstall bool
+	// CloneOpts are extra arguments passed to git clone; Depth sets --depth (nil keeps
+	// the shallow default, 0 clones full history).
+	CloneOpts []string
+	Depth     *int
 }
 
 // gitURL builds the clone URL the way from `proto`: a scheme prefix, then host/repository.

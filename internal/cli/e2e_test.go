@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -355,6 +356,54 @@ func TestAddWritesProtoField(t *testing.T) {
 	}
 }
 
+func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"add", "p10k", "--github", "romkatv/powerlevel10k", "--cloneopts=--single-branch,--no-tags", "--depth", "0"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "cloneopts = [\"--single-branch\", \"--no-tags\"]") {
+		t.Fatalf("add did not write cloneopts: %s", contents)
+	}
+	if !strings.Contains(string(contents), "depth = 0") {
+		t.Fatalf("add did not write depth: %s", contents)
+	}
+}
+
+func TestAddRejectsCloneOptionsOnInlinePlugin(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"add", "demo", "--inline", "echo hi", "--depth", "1"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("add accepted depth on an inline plugin")
+	}
+}
+
 func TestListWorksWithoutLockFile(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
@@ -603,7 +652,7 @@ func TestDoctorReportsHealthyConfigurationAndLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	configFile := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo test\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configFile, []byte("shell = \"bash\"\n\n[plugins.test]\ninline = \"echo test\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELF_CONFIG_DIR", configDir)
@@ -617,8 +666,18 @@ func TestDoctorReportsHealthyConfigurationAndLock(t *testing.T) {
 	if err := Execute([]string{"doctor"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "config: ok\nlock: ok\n" {
-		t.Fatalf("doctor output = %q", output.String())
+	shellPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionOutput, err := exec.Command(shellPath, "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionLine := strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(versionOutput)), "\n", 2)[0])
+	want := fmt.Sprintf("version:  shelf %s\nshell:    %s\n          %s\n\nconfig:   ok  %s\nlock:     ok  %s\n\nNo problems found\n", Version, shellPath, versionLine, configFile, filepath.Join(directory, "data", "plugins.lock"))
+	if output.String() != want {
+		t.Fatalf("doctor output = %q, want %q", output.String(), want)
 	}
 }
 

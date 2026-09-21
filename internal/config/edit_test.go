@@ -160,6 +160,26 @@ func TestAddWritesProtoRatherThanProtocol(t *testing.T) {
 	}
 }
 
+func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(path, "p10k", RawPlugin{GitHub: "romkatv/powerlevel10k", CloneOpts: []string{"--single-branch", "--filter=blob:none"}, Depth: intPtr(0)}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "cloneopts = [\"--single-branch\", \"--filter=blob:none\"]") {
+		t.Fatalf("add did not write cloneopts: %s", contents)
+	}
+	if !strings.Contains(string(contents), "depth = 0") {
+		t.Fatalf("add did not write depth: %s", contents)
+	}
+}
+
 func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugins.toml")
 	original := "shell = \"zsh\"\n\nplugins.fzf.inline = \"echo fzf\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"

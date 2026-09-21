@@ -167,6 +167,12 @@ func encodePlugin(name string, plugin RawPlugin) string {
 	if len(plugin.Profiles) > 0 {
 		lines = append(lines, "profiles = "+tomlArray(plugin.Profiles))
 	}
+	if len(plugin.CloneOpts) > 0 {
+		lines = append(lines, "cloneopts = "+tomlArray(plugin.CloneOpts))
+	}
+	if plugin.Depth != nil {
+		lines = append(lines, fmt.Sprintf("depth = %d", *plugin.Depth))
+	}
 	if len(plugin.Hooks) > 0 {
 		// Every hook shares one subtable, sorted, since a repeated header would redefine it.
 		keys := make([]string, 0, len(plugin.Hooks))

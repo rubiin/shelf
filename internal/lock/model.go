@@ -52,4 +52,7 @@ type LockedPlugin struct {
 	Files     []string          `toml:"files,omitempty"`
 	Apply     []string          `toml:"apply,omitempty"`
 	Hooks     map[string]string `toml:"hooks,omitempty"`
+	// CloneOpts and Depth record the clone behavior so Restore reinstalls identically.
+	CloneOpts []string `toml:"cloneopts,omitempty"`
+	Depth     *int     `toml:"depth,omitempty"`
 }

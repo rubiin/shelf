@@ -30,4 +30,8 @@ type RawPlugin struct {
 	Apply    []string          `toml:"apply"`
 	Profiles []string          `toml:"profiles"`
 	Hooks    map[string]string `toml:"hooks"`
+	// CloneOpts are extra arguments passed to git clone for git, github, and gist sources.
+	CloneOpts []string `toml:"cloneopts"`
+	// Depth sets the git clone depth; nil keeps the shallow depth-1 default, 0 clones full history.
+	Depth *int `toml:"depth"`
 }

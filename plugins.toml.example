@@ -50,3 +50,10 @@ apply = ["defer"]
 # [plugins.sudo]
 # github = "ohmyzsh/ohmyzsh"
 # dir = "plugins/sudo"
+
+# Clone control: depth 0 clones full history (default is a shallow depth-1
+# clone), and cloneopts pass extra arguments to git clone:
+# [plugins.myrepo]
+# github = "owner/myrepo"
+# depth = 0
+# cloneopts = ["--single-branch", "--filter=blob:none"]

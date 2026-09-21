@@ -143,6 +143,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto, Remote: plugin.Remote,
 		Local: plugin.Local, Optional: plugin.Optional, Ref: plugin.Rev, Branch: plugin.Branch,
 		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
+		CloneOpts: plugin.CloneOpts, Depth: plugin.Depth,
 	})
 	if err != nil {
 		return LockedPlugin{}, fmt.Errorf("install plugin %q: %w", name, err)
@@ -183,7 +184,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if len(apply) == 0 {
 		apply = []string{"source"}
 	}
-	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks}, nil
+	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}, nil
 }
 
 // Restore reinstalls the revisions the lock pinned, using only the lock so a caller that holds a
@@ -199,7 +200,7 @@ func Restore(locked LockedConfig, installer source.Installer, concurrency int) e
 	}
 	return RunConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin := tasks[index]
-		if _, err := installer.Install(installContext, source.Request{Name: plugin.Name, Git: plugin.URL, Ref: plugin.Rev}); err != nil {
+		if _, err := installer.Install(installContext, source.Request{Name: plugin.Name, Git: plugin.URL, Ref: plugin.Rev, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}); err != nil {
 			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
 		}
 		return nil

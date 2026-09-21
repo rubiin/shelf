@@ -136,14 +136,16 @@ func TestLoadPreservesPluginDeclarationOrder(t *testing.T) {
 func TestValidateRejectsInlinePluginFields(t *testing.T) {
 	// An inline plugin carries only text, hooks, and profiles.
 	fields := map[string]RawPlugin{
-		"proto":  {Inline: "echo hi", Proto: "ssh"},
-		"rev":    {Inline: "echo hi", Rev: "v1.0.0"},
-		"branch": {Inline: "echo hi", Branch: "main"},
-		"tag":    {Inline: "echo hi", Tag: "v1.0.0"},
-		"dir":    {Inline: "echo hi", Dir: "plugins/demo"},
-		"file":   {Inline: "echo hi", File: "demo.plugin.zsh"},
-		"use":    {Inline: "echo hi", Use: []string{"*.zsh"}},
-		"apply":  {Inline: "echo hi", Apply: []string{"source"}},
+		"proto":     {Inline: "echo hi", Proto: "ssh"},
+		"rev":       {Inline: "echo hi", Rev: "v1.0.0"},
+		"branch":    {Inline: "echo hi", Branch: "main"},
+		"tag":       {Inline: "echo hi", Tag: "v1.0.0"},
+		"dir":       {Inline: "echo hi", Dir: "plugins/demo"},
+		"file":      {Inline: "echo hi", File: "demo.plugin.zsh"},
+		"use":       {Inline: "echo hi", Use: []string{"*.zsh"}},
+		"apply":     {Inline: "echo hi", Apply: []string{"source"}},
+		"cloneopts": {Inline: "echo hi", CloneOpts: []string{"--no-tags"}},
+		"depth":     {Inline: "echo hi", Depth: intPtr(2)},
 	}
 	for field, plugin := range fields {
 		cfg := Config{Plugins: map[string]RawPlugin{"demo": plugin}}
@@ -161,3 +163,57 @@ func TestValidateRejectsInlinePluginFields(t *testing.T) {
 		t.Fatalf("valid inline plugin was rejected: %v", err)
 	}
 }
+
+func TestLoadAndValidateCloneOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[plugins.p10k]\ngithub = \"romkatv/powerlevel10k\"\ncloneopts = [\"--single-branch\", \"--filter=blob:none\"]\ndepth = 0\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	plugin := cfg.Plugins["p10k"]
+	if len(plugin.CloneOpts) != 2 || plugin.CloneOpts[0] != "--single-branch" || plugin.CloneOpts[1] != "--filter=blob:none" {
+		t.Fatalf("cloneopts = %v", plugin.CloneOpts)
+	}
+	if plugin.Depth == nil || *plugin.Depth != 0 {
+		t.Fatalf("depth = %v, want 0", plugin.Depth)
+	}
+}
+
+func TestValidateChecksCloneOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		plugin RawPlugin
+	}{
+		{name: "cloneopts on remote", plugin: RawPlugin{Remote: "https://example.test/plugin.zsh", CloneOpts: []string{"--single-branch"}}},
+		{name: "cloneopts on local", plugin: RawPlugin{Local: "/plugins", CloneOpts: []string{"--single-branch"}}},
+		{name: "empty cloneopt", plugin: RawPlugin{GitHub: "a/b", CloneOpts: []string{""}}},
+		{name: "negative depth", plugin: RawPlugin{GitHub: "a/b", Depth: intPtr(-1)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{Plugins: map[string]RawPlugin{"bad": test.plugin}}
+			if err := Validate(cfg); err == nil {
+				t.Fatalf("plugin %+v was accepted", test.plugin)
+			}
+		})
+	}
+	depth := 2
+	git := Config{Plugins: map[string]RawPlugin{"good": {Git: "https://example.test/repo.git", CloneOpts: []string{"--no-tags"}, Depth: &depth}}}
+	if err := Validate(git); err != nil {
+		t.Fatalf("git plugin with cloneopts and depth was rejected: %v", err)
+	}
+	for _, plugin := range []RawPlugin{{GitHub: "a/b", Depth: intPtr(0)}, {Gist: "abc123", Depth: intPtr(3)}} {
+		if err := Validate(Config{Plugins: map[string]RawPlugin{"good": plugin}}); err != nil {
+			t.Fatalf("git plugin %+v was rejected: %v", plugin, err)
+		}
+	}
+}
+
+func intPtr(value int) *int { return &value }

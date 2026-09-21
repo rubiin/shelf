@@ -3,16 +3,20 @@ package source
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func intPtr(value int) *int { return &value }
 
 func TestInstallerDownloadsRemoteSource(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -423,10 +427,89 @@ func TestInstallerShallowClonesGitSources(t *testing.T) {
 	}
 }
 
-// TestInstallerFallsBackToFullCloneForPinnedRevision verifies that a `rev` pinning a
-// bare commit SHA still installs when the server won't serve that SHA from a
-// depth-limited clone (the file:// transport refuses, like self-hosted forges): the
-// shallow attempt must give way to a full clone that reaches the pinned revision.
+// TestInstallerHonorsPerPluginDepth verifies depth reaches git clone: unset keeps
+// the shallow depth-1 default, an explicit depth fetches that many ancestors, and
+// depth 0 clones full history (like zplug's depth:0).
+func TestInstallerHonorsPerPluginDepth(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 3 {
+		commitFile(t, repository, "plugin.zsh", fmt.Sprintf("echo commit-%d\n", index))
+	}
+	sourceURL := "file://" + repository
+
+	tests := []struct {
+		name        string
+		depth       *int
+		wantCommits int
+		wantShallow bool
+	}{
+		{name: "unset keeps shallow default", wantCommits: 1, wantShallow: true},
+		{name: "depth 2 keeps two ancestors", depth: intPtr(2), wantCommits: 2, wantShallow: true},
+		{name: "depth 0 clones full history", depth: intPtr(0), wantCommits: 3, wantShallow: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := filepath.Join(t.TempDir(), "data")
+			installed, err := NewInstaller(dataDir).Install(context.Background(), Request{Name: "demo", Git: sourceURL, Depth: test.depth})
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("git", "-C", installed.Directory, "rev-list", "--count", "HEAD").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(output)); got != strconv.Itoa(test.wantCommits) {
+				t.Fatalf("reachable commits = %s, want %d", got, test.wantCommits)
+			}
+			_, statErr := os.Stat(filepath.Join(installed.Directory, ".git", "shallow"))
+			if test.wantShallow && os.IsNotExist(statErr) {
+				t.Fatal("expected a shallow clone marker")
+			}
+			if !test.wantShallow && statErr == nil {
+				t.Fatal("expected a full clone, found a shallow marker")
+			}
+		})
+	}
+}
+
+// TestInstallerPassesCloneOptionsThrough verifies cloneopts reach git clone: a
+// --no-tags clone must have no tags while the default clone fetches them.
+func TestInstallerPassesCloneOptionsThrough(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, repository, "plugin.zsh", "echo first\n")
+	commitFile(t, repository, "plugin.zsh", "echo second\n")
+	if output, err := exec.Command("git", "-C", repository, "tag", "v1", "-m", "v1").CombinedOutput(); err != nil {
+		t.Fatalf("git tag v1: %v\n%s", err, output)
+	}
+	sourceURL := "file://" + repository
+
+	cloneTags := func(t *testing.T, request Request) string {
+		t.Helper()
+		installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command("git", "-C", installed.Directory, "tag").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(output))
+	}
+
+	if tags := cloneTags(t, Request{Name: "default", Git: sourceURL}); tags == "" {
+		t.Fatal("default clone fetched no tags")
+	}
+	if tags := cloneTags(t, Request{Name: "notags", Git: sourceURL, CloneOpts: []string{"--no-tags"}}); tags != "" {
+		t.Fatalf("clone with --no-tags fetched tags %q", tags)
+	}
+}
+
 func TestInstallerFallsBackToFullCloneForPinnedRevision(t *testing.T) {
 	repository := t.TempDir()
 	if err := os.MkdirAll(repository, 0o755); err != nil {

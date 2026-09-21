@@ -95,6 +95,19 @@ func Validate(cfg Config) error {
 				return fmt.Errorf("plugin %q can only set proto for github or gist sources", name)
 			}
 		}
+		if len(plugin.CloneOpts) > 0 || plugin.Depth != nil {
+			if !usesGitSource(plugin) {
+				return fmt.Errorf("plugin %q can only set cloneopts and depth for git sources", name)
+			}
+			for _, option := range plugin.CloneOpts {
+				if option == "" {
+					return fmt.Errorf("plugin %q has an empty cloneopt", name)
+				}
+			}
+			if plugin.Depth != nil && *plugin.Depth < 0 {
+				return fmt.Errorf("plugin %q depth must be 0 or greater", name)
+			}
+		}
 		if plugin.Inline != "" {
 			if err := validateInlinePlugin(name, plugin); err != nil {
 				return err
@@ -102,6 +115,10 @@ func Validate(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func usesGitSource(plugin RawPlugin) bool {
+	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != ""
 }
 
 func validEnvironmentName(name string) bool {
@@ -140,10 +157,14 @@ func validateInlinePlugin(name string, plugin RawPlugin) error {
 	}{
 		{"use", len(plugin.Use)},
 		{"apply", len(plugin.Apply)},
+		{"cloneopts", len(plugin.CloneOpts)},
 	} {
 		if field.count > 0 {
 			return fmt.Errorf("plugin %q cannot set %s for an inline plugin", name, field.name)
 		}
+	}
+	if plugin.Depth != nil {
+		return fmt.Errorf("plugin %q cannot set depth for an inline plugin", name)
 	}
 	return nil
 }

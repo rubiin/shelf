@@ -217,15 +217,20 @@ func NewRoot() *cobra.Command {
 	var addGitHub, addGit, addGist, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
-	var addUse, addApply, addProfiles []string
+	var addUse, addApply, addProfiles, addCloneOpts []string
 	var addHooks map[string]string
+	var addDepth int
 	addCommand := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Add a plugin to the configuration",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var depth *int
+			if cmd.Flags().Changed("depth") {
+				depth = &addDepth
+			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks})
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
 			})
 		},
 	}
@@ -247,6 +252,8 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
 	addCommand.Flags().StringSliceVar(&addApply, "apply", nil, "template names")
 	addCommand.Flags().StringSliceVar(&addProfiles, "profiles", nil, "plugin profiles")
+	addCommand.Flags().StringSliceVar(&addCloneOpts, "cloneopts", nil, "extra git clone arguments")
+	addCommand.Flags().IntVar(&addDepth, "depth", 0, "git clone depth; 0 clones full history")
 	addCommand.Flags().StringToStringVar(&addHooks, "hooks", nil, "plugin hooks")
 	command.AddCommand(addCommand)
 
@@ -817,20 +824,42 @@ func doctor(paths Paths, output io.Writer) error {
 		return err
 	}
 	fingerprint = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
-	if _, err := fmt.Fprintln(output, "config: ok"); err != nil {
+	if _, err := fmt.Fprintf(output, "%-8s  %s\n", "version:", "shelf "+Version); err != nil {
 		return err
-	}
-	if usesGit(cfg) {
-		if _, err := exec.LookPath("git"); err != nil {
-			return fmt.Errorf("git is required for configured Git plugins: %w", err)
-		}
-		if _, err := fmt.Fprintln(output, "git: ok"); err != nil {
-			return err
-		}
 	}
 	shell, err := resolveShell(cfg)
 	if err != nil {
 		return err
+	}
+	shellPath, err := exec.LookPath(string(shell))
+	if err != nil {
+		return fmt.Errorf("%s is not installed: %w", shell, err)
+	}
+	shellVersion, err := shellVersion(shellPath)
+	if err != nil {
+		return fmt.Errorf("could not determine %s version: %w", shell, err)
+	}
+	if _, err := fmt.Fprintf(output, "%-8s  %s\n", "shell:", displayPath(shellPath)); err != nil {
+		return err
+	}
+	// Continuation line aligned with the value column under "shell:".
+	if _, err := fmt.Fprintf(output, "%*s%s\n", 10, "", shellVersion); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "%-8s  %s  %s\n", "config:", "ok", displayPath(paths.ConfigFile)); err != nil {
+		return err
+	}
+	if usesGit(cfg) {
+		git, err := exec.LookPath("git")
+		if err != nil {
+			return fmt.Errorf("git is required for configured Git plugins: %w", err)
+		}
+		if _, err := fmt.Fprintf(output, "%-8s  %s  %s\n", "git:", "ok", displayPath(git)); err != nil {
+			return err
+		}
 	}
 	valid, err := lock.Verify(paths.LockFile(profile), lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell)})
 	if err != nil {
@@ -839,8 +868,21 @@ func doctor(paths Paths, output io.Writer) error {
 	if !valid {
 		return fmt.Errorf("lockfile is stale or selected plugin files are missing")
 	}
-	_, err = fmt.Fprintln(output, "lock: ok")
+	if _, err := fmt.Fprintf(output, "%-8s  %s  %s\n", "lock:", "ok", displayPath(paths.LockFile(profile))); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(output, "\nNo problems found")
 	return err
+}
+
+// shellVersion returns the first line of `<shell> --version`.
+func shellVersion(shellPath string) (string, error) {
+	output, err := exec.Command(shellPath, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\n")
+	return strings.TrimSpace(line), nil
 }
 
 func usesGit(cfg config.Config) bool {

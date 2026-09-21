@@ -18,6 +18,7 @@
 
 - Git, GitHub, Gist, remote, local, and inline plugins.
 - Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
+- Per-plugin `cloneopts` and clone `depth` for Git sources, recorded in the lock.
 - Bash and Zsh output with per-plugin file globs and hooks.
 - Profiles, an `[env]` block, and custom apply templates.
 - Locked installs with a revision manifest for reproducible setups.
@@ -244,10 +245,27 @@ github = "ohmyzsh/ohmyzsh"
 URL or local Git repository. `remote` downloads one file. `local` uses an
 existing file or directory, and `inline` stores shell code directly in TOML.
 
-Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, and
-`proto`. `proto` selects the protocol for `github` and `gist`: `https`, `git`,
-or `ssh`. `shelf add --proto ssh` writes the same field. `use` accepts
-recursive glob patterns relative to the installed plugin directory.
+Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, `proto`,
+`cloneopts`, and `depth`. `proto` selects the protocol for `github` and `gist`:
+`https`, `git`, or `ssh`. `shelf add --proto ssh` writes the same field. `use`
+accepts recursive glob patterns relative to the installed plugin directory.
+
+Git plugins are cloned shallowly (`--depth 1`) by default. `depth` overrides the
+clone depth: `depth = 0` clones full history, and a positive value fetches that
+many ancestors. `cloneopts` passes extra arguments straight to `git clone` for
+`git`, `github`, and `gist` sources:
+
+```toml
+[plugins.myrepo]
+github = "owner/myrepo"
+depth = 0
+cloneopts = ["--single-branch", "--filter=blob:none"]
+```
+
+`depth` and `cloneopts` apply to fresh installs; use `shelf lock
+--reinstall` or `shelf source --relock` to re-clone an already installed source
+with new options. Both are recorded in the runtime lock, so reinstalls keep the
+exact clone behavior.
 
 The optional `[env]` table is rendered before every plugin. Its keys must be
 shell variable names; its string values are shell assignment right-hand sides,
