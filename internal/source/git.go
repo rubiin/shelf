@@ -76,7 +76,7 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 	if err != nil {
 		return Installed{}, err
 	}
-	return Installed{Directory: sourceDirectory(directory, request.Dir), Revision: strings.TrimSpace(revision)}, nil
+	return Installed{Directory: sourceDirectory(directory, request.Dir), Root: directory, Revision: strings.TrimSpace(revision)}, nil
 }
 
 func runGit(ctx context.Context, args ...string) error {

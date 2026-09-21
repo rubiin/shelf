@@ -68,9 +68,11 @@ func gitURL(request Request) string {
 
 type Installed struct {
 	Directory string
-	File      string
-	Revision  string
-	Skipped   bool
+	// Root is the plugin's source root before dir narrowing; build hooks run here.
+	Root     string
+	File     string
+	Revision string
+	Skipped  bool
 }
 
 type Installer interface {
