@@ -97,7 +97,9 @@ shelf lock
 eval "$(shelf source)"
 ```
 
-Add the `eval` command to `.bashrc` or `.zshrc`.
+Add the `eval` command to `.bashrc` or `.zshrc`. Each plugin is evaluated
+separately, so aliases and functions defined by one plugin are available to
+later plugins.
 
 ## Build and test
 
