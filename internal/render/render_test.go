@@ -2,6 +2,9 @@ package render
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,7 +16,7 @@ func TestScriptSourcesLockedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if script != "source \"/tmp/demo.sh\"\n" {
+	if script != "eval 'source \"/tmp/demo.sh\"\n'\n" {
 		t.Fatalf("script = %q", script)
 	}
 }
@@ -28,9 +31,32 @@ func TestScriptRendersHooksAroundTheSourcedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "echo pre\n" + "source \"/tmp/one.zsh\"\n" + "source \"/tmp/two.zsh\"\n" + "echo post\n"
+	want := "eval 'echo pre\nsource \"/tmp/one.zsh\"\nsource \"/tmp/two.zsh\"\necho post\n'\n"
 	if script != want {
 		t.Fatalf("script = %q, want %q", script, want)
+	}
+}
+
+func TestScriptMakesAliasesAvailableAcrossPluginsWhenEvaluated(t *testing.T) {
+	directory := t.TempDir()
+	aliasFile := filepath.Join(directory, "alias.zsh")
+	if err := os.WriteFile(aliasFile, []byte("alias aliastest='echo aliastest'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{
+		{Name: "alias", Files: []string{aliasFile}},
+		{Name: "command", Inline: "aliastest\n"},
+	}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := exec.Command("zsh", "-fc", `eval "$1"`, "shelf-test", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "aliastest\n" {
+		t.Fatalf("zsh output = %q, want %q", output, "aliastest\n")
 	}
 }
 
@@ -59,7 +85,7 @@ func TestBuiltinTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if script != "path=( \"/tmp/demo\" $path )\n" {
+	if script != "eval 'path=( \"/tmp/demo\" $path )\n'\n" {
 		t.Fatalf("path script = %q", script)
 	}
 }
@@ -111,7 +137,7 @@ func TestScriptRendersHooksInTemplateOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if script != "echo pre\necho post\n" {
+	if script != "eval 'echo pre\necho post\n'\n" {
 		t.Fatalf("script = %q", script)
 	}
 }
@@ -334,7 +360,7 @@ func TestScriptRendersInlinePluginThroughTheTemplateEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "echo greeting\necho pre\necho post\n"; script != want {
+	if want := "eval 'echo greeting\necho pre\necho post\n'\n"; script != want {
 		t.Fatalf("script = %q, want %q", script, want)
 	}
 }
@@ -353,7 +379,7 @@ func TestScriptRendersFromTheTemplatesRecordedInTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "source \"/tmp/demo.zsh\" # recorded\n"; script != want {
+	if want := "eval 'source \"/tmp/demo.zsh\" # recorded\n'\n"; script != want {
 		t.Fatalf("script = %q, want %q", script, want)
 	}
 }

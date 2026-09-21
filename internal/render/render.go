@@ -50,30 +50,38 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 	// One plugin scope is reused for the whole script: it is reset per plugin, not reallocated.
 	var current scope
 	for _, plugin := range locked.Plugins {
+		var pluginOutput scriptBuffer
 		// An inline plugin's own text is the template, rendered with just its name and hooks.
 		if plugin.Inline != "" {
-			if err := renderInline(plugin, &output); err != nil {
+			if err := renderInline(plugin, &pluginOutput); err != nil {
 				return "", err
 			}
-			continue
-		}
-		apply := plugin.Apply
-		if len(apply) == 0 {
-			apply = []string{"source"}
-		}
-		// The scope is shared by every template the plugin applies.
-		current = scope{plugin: pluginData(plugin), hasPlugin: true}
-		for _, name := range apply {
-			text, exists := merged[name]
-			if !exists {
-				return "", fmt.Errorf("unknown template: %s", name)
+		} else {
+			apply := plugin.Apply
+			if len(apply) == 0 {
+				apply = []string{"source"}
 			}
-			if err := renderChunk(name, text, &current, &output); err != nil {
-				return "", err
+			// The scope is shared by every template the plugin applies.
+			current = scope{plugin: pluginData(plugin), hasPlugin: true}
+			for _, name := range apply {
+				text, exists := merged[name]
+				if !exists {
+					return "", fmt.Errorf("unknown template: %s", name)
+				}
+				if err := renderChunk(name, text, &current, &pluginOutput); err != nil {
+					return "", err
+				}
 			}
 		}
+		output.WriteString("eval ")
+		output.WriteString(quoteShell(pluginOutput.String()))
+		output.WriteString("\n")
 	}
 	return output.String(), nil
+}
+
+func quoteShell(text string) string {
+	return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'"
 }
 
 // renderChunk renders one template, appending a newline when the chunk does not end with one.
