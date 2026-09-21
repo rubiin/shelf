@@ -16,13 +16,14 @@
 
 ## Features
 
-- Git, GitHub, remote, local, and inline plugins.
-- Branch, tag, and revision selection for Git sources.
-- Bash and Zsh output.
-- Plugin file selection with glob patterns.
-- Profiles, hooks, custom apply templates, and lock files.
-- TOML configuration.
-- Cobra-generated shell completions.
+- Git, GitHub, Gist, remote, local, and inline plugins.
+- Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
+- Bash and Zsh output with per-plugin file globs and hooks.
+- Profiles, an `[env]` block, and custom apply templates.
+- Locked installs with a revision manifest for reproducible setups.
+- Concurrent installs, automatic cleanup of removed plugins, and `update`/`reinstall`/`relock`.
+- Fast startup and rendering — about twice as fast as Sheldon.
+- XDG-compliant paths with `SHELF_*` environment variables and shell completions.
 
 ## Installation
 
