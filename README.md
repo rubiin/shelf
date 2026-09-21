@@ -149,6 +149,7 @@ and renders in less than sheldon takes to start.
 shelf init
 shelf lock [--update | --reinstall] [--concurrency N]
 shelf source [--relock | --update | --reinstall] [--concurrency N]
+shelf reload
 shelf update [--lock] [--concurrency N]
 shelf path
 shelf status
@@ -352,6 +353,13 @@ Reinstall all sources:
 
 ```sh
 shelf lock --reinstall
+```
+
+Reload the current shell after changing the configuration (replace it with a
+fresh one so startup files re-run, like `omz reload`):
+
+```sh
+shelf reload
 ```
 
 Use a separate profile:

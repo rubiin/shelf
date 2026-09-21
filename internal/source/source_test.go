@@ -393,7 +393,7 @@ func TestInstallerShallowClonesGitSources(t *testing.T) {
 	if output, err := exec.Command("git", "-C", repository, "branch", "featured").CombinedOutput(); err != nil {
 		t.Fatalf("git branch featured: %v\n%s", err, output)
 	}
-	if output, err := exec.Command("git", "-C", repository, "tag", "v1").CombinedOutput(); err != nil {
+	if output, err := exec.Command("git", "-C", repository, "tag", "v1", "-m", "v1").CombinedOutput(); err != nil {
 		t.Fatalf("git tag v1: %v\n%s", err, output)
 	}
 	sourceURL := "file://" + repository
