@@ -21,9 +21,9 @@ func installLocal(request Request) (Installed, error) {
 		return Installed{}, fmt.Errorf("local source: %w", err)
 	}
 	if info.IsDir() {
-		return Installed{Directory: sourceDirectory(localPath, request.Dir)}, nil
+		return Installed{Directory: sourceDirectory(localPath, request.Dir), Root: filepath.Clean(localPath)}, nil
 	}
-	return Installed{Directory: filepath.Dir(localPath), File: filepath.Clean(localPath)}, nil
+	return Installed{Directory: filepath.Dir(localPath), Root: filepath.Dir(localPath), File: filepath.Clean(localPath)}, nil
 }
 
 func expandHomePath(path string) (string, error) {

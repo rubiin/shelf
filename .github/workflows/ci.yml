@@ -25,6 +25,9 @@ jobs:
       - name: Lint
         run: golangci-lint run
 
+      - name: Install zsh for render eval tests
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Test
         run: go test ./...
 

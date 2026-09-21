@@ -165,6 +165,9 @@ func encodePlugin(name string, plugin RawPlugin) string {
 	if len(plugin.Apply) > 0 {
 		lines = append(lines, "apply = "+tomlArray(plugin.Apply))
 	}
+	if len(plugin.Build) > 0 {
+		lines = append(lines, "build = "+tomlArray(plugin.Build))
+	}
 	if len(plugin.Profiles) > 0 {
 		lines = append(lines, "profiles = "+tomlArray(plugin.Profiles))
 	}

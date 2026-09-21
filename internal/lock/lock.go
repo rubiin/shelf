@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -151,6 +153,9 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if installed.Skipped {
 		return LockedPlugin{}, nil
 	}
+	if err := runBuild(installContext, ctx.Diagnostics, name, installed, plugin.Build); err != nil {
+		return LockedPlugin{}, err
+	}
 	var files []string
 	if plugin.File != "" {
 		file := filepath.Join(installed.Directory, plugin.File)
@@ -185,6 +190,32 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 		apply = []string{"source"}
 	}
 	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}, nil
+}
+
+// runBuild executes each build command with the POSIX shell in the plugin's source
+// root (falling back to its selected directory). The command text is user content;
+// shelf builds only the argv, never a concatenated shell string.
+func runBuild(ctx context.Context, diagnostics io.Writer, name string, installed source.Installed, commands []string) error {
+	if len(commands) == 0 {
+		return nil
+	}
+	if diagnostics == nil {
+		diagnostics = io.Discard
+	}
+	directory := installed.Root
+	if directory == "" {
+		directory = installed.Directory
+	}
+	for _, command := range commands {
+		process := exec.CommandContext(ctx, "sh", "-c", command)
+		process.Dir = directory
+		process.Stdout = diagnostics
+		process.Stderr = diagnostics
+		if err := process.Run(); err != nil {
+			return fmt.Errorf("build plugin %q in %q: command %q: %w", name, directory, command, err)
+		}
+	}
+	return nil
 }
 
 // Restore reinstalls the revisions the lock pinned, using only the lock so a caller that holds a

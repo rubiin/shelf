@@ -225,7 +225,8 @@ func TestInstallerUsesGitSubdirectory(t *testing.T) {
 		}
 	}
 
-	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installed, err := NewInstaller(dataDir).Install(context.Background(), Request{
 		Name: "ohmyzsh",
 		Git:  repository,
 		Dir:  "plugins/sudo",
@@ -239,6 +240,29 @@ func TestInstallerUsesGitSubdirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(installed.Directory, "sudo.plugin.zsh")); err != nil {
 		t.Fatalf("plugin file missing from installed directory: %v", err)
+	}
+	// Hostless local repository paths are cloned into the data directory, so the
+	// source root is the clone directory GitDirectory names, not the source path.
+	wantRoot, err := GitDirectory(dataDir, Request{Git: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Root != wantRoot {
+		t.Fatalf("installed root = %q, want %q", installed.Root, wantRoot)
+	}
+}
+
+func TestLocalFileSourceReportsParentAsRoot(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), "plugin.zsh")
+	if err := os.WriteFile(localPath, []byte("echo hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "demo", Local: localPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Root != filepath.Dir(localPath) {
+		t.Fatalf("installed root = %q, want %q", installed.Root, filepath.Dir(localPath))
 	}
 }
 

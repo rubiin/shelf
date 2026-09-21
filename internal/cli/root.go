@@ -217,7 +217,7 @@ func NewRoot() *cobra.Command {
 	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
-	var addUse, addApply, addProfiles, addCloneOpts []string
+	var addUse, addApply, addBuild, addProfiles, addCloneOpts []string
 	var addHooks map[string]string
 	var addDepth int
 	addCommand := &cobra.Command{
@@ -230,7 +230,7 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
 			})
 		},
 	}
@@ -254,6 +254,7 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addFile, "file", "", "plugin file")
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
 	addCommand.Flags().StringSliceVar(&addApply, "apply", nil, "template names")
+	addCommand.Flags().StringArrayVar(&addBuild, "build", nil, "install-time build commands")
 	addCommand.Flags().StringSliceVar(&addProfiles, "profiles", nil, "plugin profiles")
 	addCommand.Flags().StringSliceVar(&addCloneOpts, "cloneopts", nil, "extra git clone arguments")
 	addCommand.Flags().IntVar(&addDepth, "depth", 0, "git clone depth; 0 clones full history")
@@ -375,8 +376,17 @@ type sourceInputs struct {
 	Shell           string
 }
 
+// buildDiagnostics returns the writer build output streams to, or nil when quiet so
+// the lock discards it.
+func buildDiagnostics(writer io.Writer) io.Writer {
+	if quiet {
+		return nil
+	}
+	return writer
+}
+
 // loadSourceInputs reads and validates the config, resolving the lock context and shell.
-func loadSourceInputs(paths Paths) (sourceInputs, error) {
+func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return sourceInputs{}, err
@@ -393,7 +403,7 @@ func loadSourceInputs(paths Paths) (sourceInputs, error) {
 	return sourceInputs{
 		Config:          cfg,
 		BaseFingerprint: baseFingerprint,
-		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)},
+		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), Diagnostics: buildDiagnostics(diagnostics)},
 		Shell:           string(shell),
 	}, nil
 }
@@ -481,7 +491,7 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err != nil {
 		return err
 	}
-	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)}
+	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), Diagnostics: buildDiagnostics(diagnostics)}
 	cfg, err = applyRevisionManifest(paths, cfg, mode)
 	if err != nil {
 		return err
@@ -637,7 +647,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	}
 	defer func() { _ = guard.Release() }()
 	// Another process may have edited the config or relocked while we waited for the lock.
-	inputs, err := loadSourceInputs(paths)
+	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
 	}
@@ -667,7 +677,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 }
 
 func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) error {
-	inputs, err := loadSourceInputs(paths)
+	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
 	}

@@ -256,3 +256,22 @@ func TestValidateChecksCloneOptions(t *testing.T) {
 }
 
 func intPtr(value int) *int { return &value }
+
+func TestBuildRequiresADirectorySource(t *testing.T) {
+	tests := []struct {
+		name   string
+		plugin RawPlugin
+	}{
+		{name: "inline", plugin: RawPlugin{Inline: "echo hi", Build: []string{"make"}}},
+		{name: "remote", plugin: RawPlugin{Remote: "https://example.com/plugin.zsh", Build: []string{"make"}}},
+		{name: "empty entry", plugin: RawPlugin{Local: "~/demo", Build: []string{""}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{Plugins: map[string]RawPlugin{"demo": test.plugin}}
+			if err := Validate(cfg); err == nil {
+				t.Fatal("expected a validation error")
+			}
+		})
+	}
+}
