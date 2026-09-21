@@ -395,8 +395,58 @@ func TestScriptRendersInlinePluginThroughTheTemplateEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "eval 'source <(printf %s '\\''echo greeting\necho pre\necho post\n'\\'')\n'\n"; script != want {
+	if want := "eval 'source /dev/stdin <<'\\''SHELF_0'\\''\necho greeting\necho pre\necho post\nSHELF_0\n'\n"; script != want {
 		t.Fatalf("script = %q, want %q", script, want)
+	}
+}
+
+func TestScriptRendersBashInlineTextWithoutSourcing(t *testing.T) {
+	// bash parses an eval'd string as one unit, so sourcing the inline text gains nothing;
+	// rendering it straight into the per-plugin eval skips the fork per inline plugin.
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:   "greeting",
+		Inline: "echo {{ name }}\n{{ hooks?.pre | nl }}{{ hooks?.post | nl }}",
+		Hooks:  map[string]string{"pre": "echo pre", "post": "echo post"},
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "eval 'echo greeting\necho pre\necho post\n'\n"; script != want {
+		t.Fatalf("script = %q, want %q", script, want)
+	}
+}
+
+func TestScriptPicksAnInlineHeredocDelimiterThatDoesNotCollide(t *testing.T) {
+	// The inline text already contains a line equal to SHELF_0, so the heredoc must fall back.
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:   "inline",
+		Inline: "echo above\nSHELF_0\necho below\n",
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "eval 'source /dev/stdin <<'\\''SHELF_1'\\''\necho above\nSHELF_0\necho below\nSHELF_1\n'\n"; script != want {
+		t.Fatalf("script = %q, want %q", script, want)
+	}
+}
+
+func TestScriptMakesInlineAliasesAvailableToInlineFunctionsInBash(t *testing.T) {
+	// bash expands aliases only when the shell option is on (interactive shells do this) and
+	// reads an eval'd string a line at a time, so the alias is real by the time the function
+	// body is read. The fork-free bash shape must keep this working.
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:   "inline",
+		Inline: "alias aliastest='echo aliastest'\nfunctest() { aliastest; }\nfunctest\n",
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("bash", "-c", `shopt -s expand_aliases; eval "$1"`, "shelf-test", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "aliastest\n" {
+		t.Fatalf("bash output = %q, want %q", output, "aliastest\n")
 	}
 }
 

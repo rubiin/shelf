@@ -471,6 +471,57 @@ func TestStatusReportsDriftedGitRevision(t *testing.T) {
 	}
 }
 
+func TestStatusChecksGitRevisionsInParallelAndKeepsOrder(t *testing.T) {
+	directory := t.TempDir()
+	firstRepository := filepath.Join(directory, "first")
+	secondRepository := filepath.Join(directory, "second")
+	if err := os.MkdirAll(firstRepository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(secondRepository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firstRevision := gitCommit(t, firstRepository, "plugin.zsh", "echo first\n")
+	lockedSecond := gitCommit(t, secondRepository, "plugin.zsh", "echo second\n")
+	currentSecond := gitCommit(t, secondRepository, "plugin.zsh", "echo drifted\n")
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n" +
+		"[plugins.first]\ngit = \"" + firstRepository + "\"\nrev = \"" + firstRevision + "\"\n\n" +
+		"[plugins.second]\ngit = \"" + secondRepository + "\"\nrev = \"" + lockedSecond + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	// Drift the second checkout so the two git checks disagree; both still report in
+	// declaration order even though they run concurrently.
+	checkout, err := source.GitDirectory(filepath.Join(directory, "data"), source.Request{Git: secondRepository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "-C", checkout, "checkout", "--detach", currentSecond).CombinedOutput(); err != nil {
+		t.Fatalf("checkout drifted revision: %v\n%s", err, output)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"status"}, &output, &bytes.Buffer{}); err == nil {
+		t.Fatal("status succeeded for a drifted revision")
+	}
+	want := "first: ok\nsecond: revision " + currentSecond + ", want " + lockedSecond + "\n"
+	if output.String() != want {
+		t.Fatalf("status output = %q, want %q", output.String(), want)
+	}
+}
+
 func TestDoctorReportsHealthyConfigurationAndLock(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
@@ -1002,7 +1053,7 @@ func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
 	if err := Execute([]string{"source"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "eval 'source <(printf %s '\\''echo demo\n'\\'')\n'\n" {
+	if output.String() != "eval 'source /dev/stdin <<'\\''SHELF_0'\\''\necho demo\nSHELF_0\n'\n" {
 		t.Fatalf("source output = %q", output.String())
 	}
 }

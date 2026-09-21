@@ -14,6 +14,13 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 	if request.Git == "" && request.GitHub == "" && request.Gist == "" {
 		return Installed{}, fmt.Errorf("git source is empty")
 	}
+	ref := request.Ref
+	if ref == "" {
+		ref = request.Branch
+	}
+	if ref == "" {
+		ref = request.Tag
+	}
 	if request.Reinstall {
 		if err := os.RemoveAll(directory); err != nil {
 			return Installed{}, err
@@ -23,21 +30,30 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
 			return Installed{}, err
 		}
-		args := []string{"clone", "--recurse-submodules", "--", repositoryURL, directory}
+		// Fresh installs fetch only the requested ref's tip (or the remote's default
+		// branch when no ref is set) instead of the whole history, which is all most
+		// shell plugins need. A depth-limited clone can't always reach a bare commit
+		// SHA pinned with `rev` — the server must choose to serve it (e.g. GitHub's
+		// allowReachableSHA1InWant) — so fall back to the full clone when the cheap
+		// attempt fails, rather than risking a broken install.
+		args := []string{"clone", "--depth", "1", "--recurse-submodules"}
+		if ref != "" {
+			args = append(args, "--branch", ref)
+		}
+		args = append(args, "--", repositoryURL, directory)
 		if err := runGit(ctx, args...); err != nil {
-			return Installed{}, err
+			if err := os.RemoveAll(directory); err != nil {
+				return Installed{}, err
+			}
+			args := []string{"clone", "--recurse-submodules", "--", repositoryURL, directory}
+			if err := runGit(ctx, args...); err != nil {
+				return Installed{}, err
+			}
 		}
 	} else if request.Update {
 		if err := runGitIn(ctx, directory, "fetch", "--all", "--tags"); err != nil {
 			return Installed{}, err
 		}
-	}
-	ref := request.Ref
-	if ref == "" {
-		ref = request.Branch
-	}
-	if ref == "" {
-		ref = request.Tag
 	}
 	if ref != "" {
 		if err := runGitIn(ctx, directory, "checkout", "--detach", ref); err != nil {

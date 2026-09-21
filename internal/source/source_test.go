@@ -376,6 +376,108 @@ func TestInstallerDownloadsIntoTheSourceLayout(t *testing.T) {
 	}
 }
 
+// TestInstallerShallowClonesGitSources verifies that fresh installs fetch only the
+// requested ref's tip (or the remote default branch), so source repositories with long
+// histories aren't transferred wholesale. file:// URLs exercise the real shallow
+// transport: git ignores --depth for plain local-path clones.
+func TestInstallerShallowClonesGitSources(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	tip := commitFile(t, repository, "plugin.zsh", "echo second\n")
+	if first == tip {
+		t.Fatal("test setup: expected two distinct commits")
+	}
+	if output, err := exec.Command("git", "-C", repository, "branch", "featured").CombinedOutput(); err != nil {
+		t.Fatalf("git branch featured: %v\n%s", err, output)
+	}
+	if output, err := exec.Command("git", "-C", repository, "tag", "v1").CombinedOutput(); err != nil {
+		t.Fatalf("git tag v1: %v\n%s", err, output)
+	}
+	sourceURL := "file://" + repository
+
+	tests := []struct {
+		name    string
+		request Request
+	}{
+		{name: "default branch", request: Request{Name: "default", Git: sourceURL}},
+		{name: "branch", request: Request{Name: "branch", Git: sourceURL, Branch: "featured"}},
+		{name: "tag", request: Request{Name: "tag", Git: sourceURL, Tag: "v1"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := filepath.Join(t.TempDir(), "data")
+			installed, err := NewInstaller(dataDir).Install(context.Background(), test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if installed.Revision != tip {
+				t.Fatalf("revision = %q, want %q", installed.Revision, tip)
+			}
+			if _, err := os.Stat(filepath.Join(installed.Directory, ".git", "shallow")); err != nil {
+				t.Fatalf("fresh install was not a shallow clone: %v", err)
+			}
+		})
+	}
+}
+
+// TestInstallerFallsBackToFullCloneForPinnedRevision verifies that a `rev` pinning a
+// bare commit SHA still installs when the server won't serve that SHA from a
+// depth-limited clone (the file:// transport refuses, like self-hosted forges): the
+// shallow attempt must give way to a full clone that reaches the pinned revision.
+func TestInstallerFallsBackToFullCloneForPinnedRevision(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pinned := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	_ = commitFile(t, repository, "plugin.zsh", "echo second\n")
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installed, err := NewInstaller(dataDir).Install(context.Background(), Request{
+		Name: "pinned",
+		Git:  "file://" + repository,
+		Ref:  pinned,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Revision != pinned {
+		t.Fatalf("revision = %q, want the pinned commit %q", installed.Revision, pinned)
+	}
+	if _, err := os.Stat(filepath.Join(installed.Directory, ".git", "shallow")); !os.IsNotExist(err) {
+		t.Fatalf("fallback installed revision %q through a shallow clone; want a full clone", pinned)
+	}
+}
+
+// commitFile commits contents to a file in the repository directory and returns the
+// resulting revision. It seeds a git repository on first use, like the CLI e2e helper.
+func commitFile(t *testing.T, directory, file, contents string) string {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(directory, ".git")); os.IsNotExist(err) {
+		for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Shelf Tests"}} {
+			if output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, output)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(directory, file), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", file}, {"commit", "-m", contents}} {
+		if output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	output, err := exec.Command("git", "-C", directory, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
 func TestGitURLProtocolPrefixes(t *testing.T) {
 	tests := []struct {
 		name    string

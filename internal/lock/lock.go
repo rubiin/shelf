@@ -59,7 +59,7 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 		tasks = append(tasks, task{name: name, plugin: plugin})
 	}
 	plugins := make([]LockedPlugin, len(tasks))
-	err := runConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
+	err := RunConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin, err := buildPlugin(installContext, ctx, cfg, installer, mode, tasks[index].name, tasks[index].plugin)
 		if err != nil {
 			return err
@@ -79,8 +79,10 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 	return locked, nil
 }
 
-// runConcurrently runs work per index with at most concurrency workers, cancelling the rest on failure.
-func runConcurrently(count, concurrency int, work func(ctx context.Context, index int) error) error {
+// RunConcurrently runs work per index with at most concurrency workers, cancelling the rest on
+// failure. Callers that need every result (such as a status check that reports all plugins) can
+// simply never return an error, keeping all workers running to completion.
+func RunConcurrently(count, concurrency int, work func(ctx context.Context, index int) error) error {
 	if concurrency < 1 {
 		return fmt.Errorf("concurrency must be at least 1")
 	}
@@ -195,7 +197,7 @@ func Restore(locked LockedConfig, installer source.Installer, concurrency int) e
 		}
 		tasks = append(tasks, plugin)
 	}
-	return runConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
+	return RunConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin := tasks[index]
 		if _, err := installer.Install(installContext, source.Request{Name: plugin.Name, Git: plugin.URL, Ref: plugin.Rev}); err != nil {
 			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
@@ -398,7 +400,7 @@ func selectedFilesExist(locked LockedConfig) bool {
 		}
 		return true
 	}
-	missing := runConcurrently(total, verifyConcurrency, func(_ context.Context, index int) error {
+	missing := RunConcurrently(total, verifyConcurrency, func(_ context.Context, index int) error {
 		if exists(files[index]) {
 			return nil
 		}

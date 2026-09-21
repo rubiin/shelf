@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -741,17 +742,35 @@ func pluginStatus(paths Paths, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var unhealthy bool
-	for _, plugin := range locked.Plugins {
-		state := "ok"
-		if plugin.Rev != "" {
-			output, err := exec.Command("git", "-C", plugin.Directory, "rev-parse", "HEAD").Output()
-			if err != nil {
-				state = "unable to read revision"
-			} else if revision := strings.TrimSpace(string(output)); revision != plugin.Rev {
-				state = "revision " + revision + ", want " + plugin.Rev
-			}
+	// Check every git-sourced plugin's current revision in parallel, collecting
+	// results indexed by plugin position so output stays in declaration order.
+	plugins := locked.Plugins
+	states := make([]string, len(plugins))
+	var tasks []int
+	for index, plugin := range plugins {
+		if plugin.Rev == "" {
+			states[index] = "ok"
+			continue
 		}
+		tasks = append(tasks, index)
+	}
+	if err := lock.RunConcurrently(len(tasks), lock.DefaultConcurrency, func(_ context.Context, task int) error {
+		plugin := plugins[tasks[task]]
+		output, err := exec.Command("git", "-C", plugin.Directory, "rev-parse", "HEAD").Output()
+		if err != nil {
+			states[tasks[task]] = "unable to read revision"
+		} else if revision := strings.TrimSpace(string(output)); revision != plugin.Rev {
+			states[tasks[task]] = "revision " + revision + ", want " + plugin.Rev
+		} else {
+			states[tasks[task]] = "ok"
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	var unhealthy bool
+	for index, plugin := range plugins {
+		state := states[index]
 		if state != "ok" {
 			unhealthy = true
 		}

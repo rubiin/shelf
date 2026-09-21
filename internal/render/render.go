@@ -49,8 +49,11 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 	// A rough output estimate saves the buffer from growing one chunk at a time.
 	output.Grow(64 * len(locked.Plugins))
 	for _, name := range sortedEnvironmentNames(locked.Env) {
-		output.WriteString("eval ")
-		output.WriteString(quoteShell(name + "=" + locked.Env[name] + "\n"))
+		// Assignments run in the current shell whether or not they are eval'd, so they are
+		// written directly rather than paying an extra parse pass per environment variable.
+		output.WriteString(name)
+		output.WriteString("=")
+		output.WriteString(locked.Env[name])
 		output.WriteString("\n")
 	}
 	// One plugin scope is reused for the whole script: it is reset per plugin, not reallocated.
@@ -59,7 +62,7 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 		var pluginOutput scriptBuffer
 		// An inline plugin's own text is the template, rendered with just its name and hooks.
 		if plugin.Inline != "" {
-			if err := renderInline(plugin, &pluginOutput); err != nil {
+			if err := renderInline(plugin, shell, &pluginOutput); err != nil {
 				return "", err
 			}
 		} else {
@@ -79,6 +82,9 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 				}
 			}
 		}
+		// Each plugin is evaluated separately, so a whole-script `eval "$(shelf source)"`
+		// parses one plugin at a time and aliases from earlier plugins stay real for later
+		// ones.
 		output.WriteString("eval ")
 		output.WriteString(quoteShell(pluginOutput.String()))
 		output.WriteString("\n")
@@ -109,8 +115,18 @@ func renderChunk(name, text string, current *scope, output *scriptBuffer) error 
 	return nil
 }
 
-// renderInline renders an inline plugin's text, which is a template in its own right.
-func renderInline(plugin lock.LockedPlugin, output *scriptBuffer) error {
+// renderInline renders an inline plugin's text, which is a template in its own right. Bash and
+// zsh differ in how an eval'd multi-line string is read, which shapes the wrapper:
+//
+//   - bash reads an eval'd string a line at a time, so once `expand_aliases` is on (interactive
+//     shells set it) an alias is defined before the line that uses it is read; the rendered text
+//     is written straight into the per-plugin eval, which needs no helper at all.
+//   - zsh parses the whole eval'd string before running any of it, so an alias defined on one
+//     line is invisible when a function on a later line is parsed; feeding the text to `source`
+//     over stdin parses and executes it a line at a time instead. A quoted heredoc supplies the
+//     text without the process-substitution fork `source <(printf %s ...)` paid per inline
+//     plugin.
+func renderInline(plugin lock.LockedPlugin, shell string, output *scriptBuffer) error {
 	before := output.Len()
 	current := pluginScope(PluginData{Name: plugin.Name, Hooks: plugin.Hooks})
 	var rendered scriptBuffer
@@ -118,11 +134,41 @@ func renderInline(plugin lock.LockedPlugin, output *scriptBuffer) error {
 		return err
 	}
 	finishChunk(0, &rendered)
-	output.WriteString("source <(printf %s ")
-	output.WriteString(quoteShell(rendered.String()))
-	output.WriteString(")")
+	if shell != "zsh" {
+		output.WriteString(rendered.String())
+	} else {
+		delimiter := heredocDelimiter(rendered.String())
+		output.WriteString("source /dev/stdin <<'")
+		output.WriteString(delimiter)
+		output.WriteString("'\n")
+		output.WriteString(rendered.String())
+		output.WriteString(delimiter)
+		output.WriteString("\n")
+	}
 	finishChunk(before, output)
 	return nil
+}
+
+// heredocDelimiter picks a heredoc end marker that cannot appear as a literal line of the text.
+// The delimiter is emitted through a quoted heredoc, so it only ever ends the heredoc when a full
+// line of the text equals it.
+func heredocDelimiter(text string) string {
+	for index := 0; ; index++ {
+		delimiter := fmt.Sprintf("SHELF_%d", index)
+		if !containsLine(text, delimiter) {
+			return delimiter
+		}
+	}
+}
+
+// containsLine reports whether text contains a full line equal to the given line.
+func containsLine(text, line string) bool {
+	for _, candidate := range strings.Split(text, "\n") {
+		if candidate == line {
+			return true
+		}
+	}
+	return false
 }
 
 // finishChunk appends a newline when a rendered chunk is empty or does not end with one.
