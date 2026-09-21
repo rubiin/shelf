@@ -260,6 +260,21 @@ func TestGitDirectoryLayout(t *testing.T) {
 			want:    filepath.Join(dataDir, "repos", "gist.github.com", "rubiin", "579d02802b1cc17baed07753d09f5009"),
 		},
 		{
+			name:    "gitlab",
+			request: Request{GitLab: "owner/repository"},
+			want:    filepath.Join(dataDir, "repos", "gitlab.com", "owner", "repository"),
+		},
+		{
+			name:    "bitbucket",
+			request: Request{Bitbucket: "team/project"},
+			want:    filepath.Join(dataDir, "repos", "bitbucket.org", "team", "project"),
+		},
+		{
+			name:    "codeberg",
+			request: Request{Codeberg: "owner/repository"},
+			want:    filepath.Join(dataDir, "repos", "codeberg.org", "owner", "repository"),
+		},
+		{
 			name:    "git url keeps its suffix",
 			request: Request{Git: "https://example.com/plugins/plugin.git"},
 			want:    filepath.Join(dataDir, "repos", "example.com", "plugins", "plugin.git"),
@@ -283,6 +298,29 @@ func TestGitDirectoryLayout(t *testing.T) {
 	}
 	if _, err := GitDirectory(dataDir, Request{Git: "https://example.com"}); err == nil {
 		t.Fatal("a host-only URL was accepted")
+	}
+}
+
+// TestCloneURLMultiForgeProtocols verifies each forge shorthand builds the expected
+// clone URL, and that proto selects the scheme prefix for all of them.
+func TestCloneURLMultiForgeProtocols(t *testing.T) {
+	tests := []struct {
+		request Request
+		want    string
+	}{
+		{request: Request{GitHub: "owner/repo"}, want: "https://github.com/owner/repo"},
+		{request: Request{GitHub: "owner/repo", Proto: "ssh"}, want: "ssh://git@github.com/owner/repo"},
+		{request: Request{Gist: "abc123", Proto: "git"}, want: "git://gist.github.com/abc123"},
+		{request: Request{GitLab: "owner/repo"}, want: "https://gitlab.com/owner/repo"},
+		{request: Request{GitLab: "owner/repo", Proto: "ssh"}, want: "ssh://git@gitlab.com/owner/repo"},
+		{request: Request{Bitbucket: "team/project"}, want: "https://bitbucket.org/team/project"},
+		{request: Request{Bitbucket: "team/project", Proto: "git"}, want: "git://bitbucket.org/team/project"},
+		{request: Request{Codeberg: "owner/repo", Proto: "ssh"}, want: "ssh://git@codeberg.org/owner/repo"},
+	}
+	for _, test := range tests {
+		if got := CloneURL(test.request); got != test.want {
+			t.Fatalf("CloneURL(%+v) = %q, want %q", test.request, got, test.want)
+		}
 	}
 }
 

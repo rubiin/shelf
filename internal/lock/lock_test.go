@@ -252,6 +252,28 @@ func TestBuildRecordsGitPluginSourceAndRevision(t *testing.T) {
 	}
 }
 
+func TestBuildRecordsMultiForgePluginSources(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"glab": {GitLab: "owner/glab"},
+		"bb":   {Bitbucket: "team/bb"},
+		"cb":   {Codeberg: "owner/cb"},
+	}}
+	locked, err := Build(Context{Shell: "zsh"}, cfg, revisionInstaller{directory: t.TempDir(), revision: "abc123"}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"glab": "gitlab:owner/glab",
+		"bb":   "bitbucket:team/bb",
+		"cb":   "codeberg:owner/cb",
+	}
+	for _, plugin := range locked.Plugins {
+		if plugin.Source != want[plugin.Name] {
+			t.Fatalf("plugin %q source = %q, want %q", plugin.Name, plugin.Source, want[plugin.Name])
+		}
+	}
+}
+
 func TestBuildPassesCloneOptionsAndDepthToInstaller(t *testing.T) {
 	depth := 2
 	cfg := config.Config{Plugins: map[string]config.RawPlugin{

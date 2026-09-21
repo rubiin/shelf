@@ -140,7 +140,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 		return LockedPlugin{Name: name, Inline: plugin.Inline, Hooks: plugin.Hooks}, nil
 	}
 	installed, err := installer.Install(installContext, source.Request{
-		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto, Remote: plugin.Remote,
+		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto, Remote: plugin.Remote,
 		Local: plugin.Local, Optional: plugin.Optional, Ref: plugin.Rev, Branch: plugin.Branch,
 		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
 		CloneOpts: plugin.CloneOpts, Depth: plugin.Depth,
@@ -213,6 +213,12 @@ func pluginSource(plugin config.RawPlugin) string {
 		return "github:" + plugin.GitHub
 	case plugin.Gist != "":
 		return "gist:" + plugin.Gist
+	case plugin.GitLab != "":
+		return "gitlab:" + plugin.GitLab
+	case plugin.Bitbucket != "":
+		return "bitbucket:" + plugin.Bitbucket
+	case plugin.Codeberg != "":
+		return "codeberg:" + plugin.Codeberg
 	case plugin.Git != "":
 		return "git:" + plugin.Git
 	default:
@@ -221,7 +227,7 @@ func pluginSource(plugin config.RawPlugin) string {
 }
 
 func isGit(plugin config.RawPlugin) bool {
-	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != ""
+	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }
 
 // pluginCloneURL resolves a git source's clone URL, which the lock records so Restore needs no config.
@@ -229,7 +235,7 @@ func pluginCloneURL(plugin config.RawPlugin) string {
 	if !isGit(plugin) {
 		return ""
 	}
-	return source.CloneURL(source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto})
+	return source.CloneURL(source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto})
 }
 
 // PluginNames returns plugin names in declaration order, then remaining names sorted.
@@ -309,7 +315,12 @@ func RevisionManifestFrom(locked LockedConfig) RevisionManifest {
 }
 
 func isRevisionSource(value string) bool {
-	return strings.HasPrefix(value, "github:") || strings.HasPrefix(value, "gist:") || strings.HasPrefix(value, "git:")
+	for _, prefix := range []string{"github:", "gist:", "gitlab:", "bitbucket:", "codeberg:", "git:"} {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Write encodes through a temp file and an atomic rename, so a crash cannot truncate the lock.

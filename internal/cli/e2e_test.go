@@ -356,6 +356,32 @@ func TestAddWritesProtoField(t *testing.T) {
 	}
 }
 
+func TestAddWritesGitLabField(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"add", "glab", "--gitlab", "owner/glab", "--proto", "ssh"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "gitlab = \"owner/glab\"") || !strings.Contains(string(contents), "proto = \"ssh\"") {
+		t.Fatalf("add did not write the gitlab source: %s", contents)
+	}
+}
+
 func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

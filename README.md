@@ -16,7 +16,7 @@
 
 ## Features
 
-- Git, GitHub, Gist, remote, local, and inline plugins.
+- Git, GitHub, Gist, GitLab, Bitbucket, Codeberg, remote, local, and inline plugins.
 - Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
 - Per-plugin `cloneopts` and clone `depth` for Git sources, recorded in the lock.
 - Bash and Zsh output with per-plugin file globs and hooks.
@@ -210,8 +210,8 @@ another value is an error rather than a silent fallback.
 `plugins.toml` has one top-level configuration and one source per plugin. Set
 `shell = "zsh"` or `shell = "bash"`; omit it to use the default Zsh shell.
 
-Each plugin must set exactly one of `github`, `gist`, `git`, `remote`, `local`,
-or `inline`:
+Each plugin must set exactly one of `github`, `gist`, `gitlab`, `bitbucket`,
+`codeberg`, `git`, `remote`, `local`, or `inline`:
 
 ```toml
 shell = "zsh"
@@ -241,19 +241,21 @@ inline = "echo loaded"
 github = "ohmyzsh/ohmyzsh"
 ```
 
-`github` and `gist` accept `owner/repository` identifiers. `git` accepts a Git
-URL or local Git repository. `remote` downloads one file. `local` uses an
+`github`, `gist`, `gitlab`, `bitbucket`, and `codeberg` accept
+`owner/repository` identifiers and clone from the matching forge. `git` accepts
+a Git URL or local Git repository. `remote` downloads one file. `local` uses an
 existing file or directory, and `inline` stores shell code directly in TOML.
 
 Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, `proto`,
-`cloneopts`, and `depth`. `proto` selects the protocol for `github` and `gist`:
-`https`, `git`, or `ssh`. `shelf add --proto ssh` writes the same field. `use`
+`cloneopts`, and `depth`. `proto` selects the protocol for forge sources (`github`,
+`gist`, `gitlab`, `bitbucket`, `codeberg`): `https`, `git`, or `ssh`. `shelf add
+--proto ssh` writes the same field. `use`
 accepts recursive glob patterns relative to the installed plugin directory.
 
 Git plugins are cloned shallowly (`--depth 1`) by default. `depth` overrides the
 clone depth: `depth = 0` clones full history, and a positive value fetches that
 many ancestors. `cloneopts` passes extra arguments straight to `git clone` for
-`git`, `github`, and `gist` sources:
+git-based sources:
 
 ```toml
 [plugins.myrepo]
@@ -325,7 +327,7 @@ $XDG_CONFIG_HOME/shelf/plugins.lock
 $XDG_CONFIG_HOME/shelf/plugins.<profile>.lock
 ```
 
-This manifest contains only Git, GitHub, and Gist plugin names, sources, and
+This manifest contains only Git-based plugin names, sources, and
 resolved commit revisions. Commit it with `plugins.toml` to make plugin
 versions reproducible. When present, `shelf lock`, `shelf lock --reinstall`,
 and `shelf source --relock` use its matching revisions. `shelf lock --update`

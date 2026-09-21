@@ -214,7 +214,7 @@ func NewRoot() *cobra.Command {
 			})
 		},
 	})
-	var addGitHub, addGit, addGist, addRemote, addLocal, addInline string
+	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
 	var addUse, addApply, addProfiles, addCloneOpts []string
@@ -230,13 +230,16 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
 			})
 		},
 	}
 	addCommand.Flags().StringVar(&addGitHub, "github", "", "GitHub repository")
 	addCommand.Flags().StringVar(&addGit, "git", "", "Git repository")
 	addCommand.Flags().StringVar(&addGist, "gist", "", "GitHub Gist")
+	addCommand.Flags().StringVar(&addGitLab, "gitlab", "", "GitLab repository")
+	addCommand.Flags().StringVar(&addBitbucket, "bitbucket", "", "Bitbucket repository")
+	addCommand.Flags().StringVar(&addCodeberg, "codeberg", "", "Codeberg repository")
 	addCommand.Flags().StringVar(&addRemote, "remote", "", "remote URL")
 	addCommand.Flags().StringVar(&addLocal, "local", "", "local path")
 	addCommand.Flags().BoolVar(&addOptional, "optional", false, "skip a missing local plugin")
@@ -244,7 +247,7 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addRev, "rev", "", "Git revision")
 	addCommand.Flags().StringVar(&addBranch, "branch", "", "Git branch")
 	addCommand.Flags().StringVar(&addTag, "tag", "", "Git tag")
-	addCommand.Flags().StringVar(&addProto, "proto", "", "Git protocol for github and gist sources: https, git, or ssh")
+	addCommand.Flags().StringVar(&addProto, "proto", "", "Git protocol for forge sources: https, git, or ssh")
 	addCommand.Flags().StringVar(&addProtocol, "protocol", "", "deprecated alias of --proto")
 	_ = addCommand.Flags().MarkHidden("protocol")
 	addCommand.Flags().StringVar(&addDir, "dir", "", "plugin subdirectory")
@@ -954,8 +957,8 @@ func ownedInstallPaths(dataDirectory string, cfg config.Config) (map[string]bool
 	}
 	for _, plugin := range cfg.Plugins {
 		switch {
-		case plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "":
-			directory, err := source.GitDirectory(dataDirectory, source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, Proto: plugin.Proto, Ref: plugin.Rev, Branch: plugin.Branch, Tag: plugin.Tag, Dir: plugin.Dir})
+		case plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != "":
+			directory, err := source.GitDirectory(dataDirectory, source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto, Ref: plugin.Rev, Branch: plugin.Branch, Tag: plugin.Tag, Dir: plugin.Dir})
 			if err != nil {
 				return nil, nil, err
 			}

@@ -180,6 +180,23 @@ func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
 	}
 }
 
+func TestAddWritesMultiForgeFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(path, "glab", RawPlugin{GitLab: "owner/glab", Proto: "ssh"}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "gitlab = \"owner/glab\"") || !strings.Contains(string(contents), "proto = \"ssh\"") {
+		t.Fatalf("add did not write the gitlab source: %s", contents)
+	}
+}
+
 func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugins.toml")
 	original := "shell = \"zsh\"\n\nplugins.fzf.inline = \"echo fzf\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"

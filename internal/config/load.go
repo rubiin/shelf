@@ -68,7 +68,7 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("plugin name is empty")
 		}
 		sources := 0
-		for _, value := range []string{plugin.GitHub, plugin.Git, plugin.Gist, plugin.Remote, plugin.Local, plugin.Inline} {
+		for _, value := range []string{plugin.GitHub, plugin.Git, plugin.Gist, plugin.GitLab, plugin.Bitbucket, plugin.Codeberg, plugin.Remote, plugin.Local, plugin.Inline} {
 			if value != "" {
 				sources++
 			}
@@ -91,8 +91,8 @@ func Validate(cfg Config) error {
 			default:
 				return fmt.Errorf("plugin %q proto %q must be git, https, or ssh", name, plugin.Proto)
 			}
-			if plugin.GitHub == "" && plugin.Gist == "" {
-				return fmt.Errorf("plugin %q can only set proto for github or gist sources", name)
+			if !usesForgeSource(plugin) {
+				return fmt.Errorf("plugin %q can only set proto for forge sources", name)
 			}
 		}
 		if len(plugin.CloneOpts) > 0 || plugin.Depth != nil {
@@ -118,7 +118,13 @@ func Validate(cfg Config) error {
 }
 
 func usesGitSource(plugin RawPlugin) bool {
-	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != ""
+	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
+}
+
+// usesForgeSource reports whether the plugin is a git, github, gist, gitlab,
+// bitbucket, or codeberg source, the shorthands for which proto picks a protocol.
+func usesForgeSource(plugin RawPlugin) bool {
+	return plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }
 
 func validEnvironmentName(name string) bool {

@@ -149,6 +149,7 @@ func encodePlugin(name string, plugin RawPlugin) string {
 	lines := []string{"[plugins." + name + "]"}
 	fields := []struct{ key, value string }{
 		{"github", plugin.GitHub}, {"git", plugin.Git}, {"gist", plugin.Gist},
+		{"gitlab", plugin.GitLab}, {"bitbucket", plugin.Bitbucket}, {"codeberg", plugin.Codeberg},
 		{"remote", plugin.Remote}, {"local", plugin.Local}, {"inline", plugin.Inline},
 		{"rev", plugin.Rev}, {"branch", plugin.Branch}, {"tag", plugin.Tag},
 		{"proto", plugin.Proto}, {"dir", plugin.Dir}, {"file", plugin.File},

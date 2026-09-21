@@ -33,6 +33,16 @@ apply = ["defer"]
 # github = "owner/plugin"
 # proto = "ssh"
 
+# Other forges use their own key and host: gitlab.com, bitbucket.org, codeberg.org.
+# [plugins.gitlab-example]
+# gitlab = "owner/plugin"
+#
+# [plugins.bitbucket-example]
+# bitbucket = "team/plugin"
+#
+# [plugins.codeberg-example]
+# codeberg = "owner/plugin"
+
 # Git reference examples:
 # [plugins.branch-example]
 # github = "owner/plugin"

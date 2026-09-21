@@ -111,6 +111,45 @@ func TestValidateAllowsOptionalLocalPluginsOnly(t *testing.T) {
 	}
 }
 
+func TestLoadAndValidateMultiForgeSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[plugins.glab]\ngitlab = \"owner/repo\"\n\n[plugins.bb]\nbitbucket = \"team/project\"\nproto = \"ssh\"\n\n[plugins.cb]\ncodeberg = \"owner/repo\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Plugins["glab"].GitLab != "owner/repo" || cfg.Plugins["bb"].Bitbucket != "team/project" || cfg.Plugins["bb"].Proto != "ssh" || cfg.Plugins["cb"].Codeberg != "owner/repo" {
+		t.Fatalf("multi-forge plugins = %+v", cfg.Plugins)
+	}
+	// A forge key counts as one source, so two of them must be rejected.
+	multiple := Config{Plugins: map[string]RawPlugin{"bad": {GitHub: "a/b", GitLab: "c/d"}}}
+	if err := Validate(multiple); err == nil || !strings.Contains(err.Error(), "exactly one source") {
+		t.Fatalf("two forge sources error = %v", err)
+	}
+	// proto selects the protocol for every forge host.
+	for _, plugin := range []RawPlugin{
+		{GitHub: "a/b", Proto: "ssh"},
+		{Gist: "abc123", Proto: "git"},
+		{GitLab: "a/b", Proto: "ssh"},
+		{Bitbucket: "a/b", Proto: "https"},
+		{Codeberg: "a/b", Proto: "git"},
+	} {
+		if err := Validate(Config{Plugins: map[string]RawPlugin{"good": plugin}}); err != nil {
+			t.Fatalf("forge source %+v with proto was rejected: %v", plugin, err)
+		}
+	}
+	// proto still requires a forge host: a plain git URL cannot set it.
+	if err := Validate(Config{Plugins: map[string]RawPlugin{"bad": {Git: "https://example.test/x.git", Proto: "ssh"}}}); err == nil {
+		t.Fatal("proto on a plain git source was accepted")
+	}
+}
+
 func TestLoadPreservesPluginDeclarationOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	contents := "[plugins.zsh-defer]\ninline = \"echo defer\"\n\n[plugins.zsh-vi-mode]\ninline = \"echo vi\"\n\n[plugins.powerlevel10k]\ninline = \"echo prompt\"\n"

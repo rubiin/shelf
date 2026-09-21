@@ -15,6 +15,9 @@ type Request struct {
 	Git       string
 	GitHub    string
 	Gist      string
+	GitLab    string
+	Bitbucket string
+	Codeberg  string
 	Proto     string
 	Remote    string
 	Local     string
@@ -39,9 +42,19 @@ func gitURL(request Request) string {
 	}
 	repository := request.GitHub
 	host := "github.com"
-	if request.Gist != "" {
+	switch {
+	case request.Gist != "":
 		repository = request.Gist
 		host = "gist.github.com"
+	case request.GitLab != "":
+		repository = request.GitLab
+		host = "gitlab.com"
+	case request.Bitbucket != "":
+		repository = request.Bitbucket
+		host = "bitbucket.org"
+	case request.Codeberg != "":
+		repository = request.Codeberg
+		host = "codeberg.org"
 	}
 	prefix := "https://"
 	switch request.Proto {
