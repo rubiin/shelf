@@ -1280,3 +1280,77 @@ func TestAddWritesBuildCommands(t *testing.T) {
 		t.Fatalf("config = %s", contents)
 	}
 }
+
+func TestBuildHookGeneratesTheSourcedFile(t *testing.T) {
+	directory := t.TempDir()
+	pluginDirectory := filepath.Join(directory, "plugin")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"" + pluginDirectory + "\"\nbuild = [\"touch generated.zsh\"]\nuse = [\"generated.zsh\"]\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Execute([]string{"source"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "generated.zsh") {
+		t.Fatalf("source output = %q, want the generated file", output.String())
+	}
+}
+
+func TestQuietSuppressesBuildOutput(t *testing.T) {
+	directory := t.TempDir()
+	pluginDirectory := filepath.Join(directory, "plugin")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"" + pluginDirectory + "\"\nbuild = [\"echo built-here\"]\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_QUIET", "false")
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock", "--quiet"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("lock: %v (stderr %q)", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "built-here") {
+		t.Fatalf("quiet lock streamed build output: %q", stderr.String())
+	}
+}
+
+func TestLockStreamsBuildOutputToStderr(t *testing.T) {
+	directory := t.TempDir()
+	pluginDirectory := filepath.Join(directory, "plugin")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"" + pluginDirectory + "\"\nbuild = [\"echo built-here\"]\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_QUIET", "false")
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("lock: %v (stderr %q)", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "built-here") {
+		t.Fatalf("lock stderr = %q, want build output", stderr.String())
+	}
+}

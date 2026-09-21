@@ -376,8 +376,17 @@ type sourceInputs struct {
 	Shell           string
 }
 
+// buildDiagnostics returns the writer build output streams to, or nil when quiet so
+// the lock discards it.
+func buildDiagnostics(writer io.Writer) io.Writer {
+	if quiet {
+		return nil
+	}
+	return writer
+}
+
 // loadSourceInputs reads and validates the config, resolving the lock context and shell.
-func loadSourceInputs(paths Paths) (sourceInputs, error) {
+func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return sourceInputs{}, err
@@ -394,7 +403,7 @@ func loadSourceInputs(paths Paths) (sourceInputs, error) {
 	return sourceInputs{
 		Config:          cfg,
 		BaseFingerprint: baseFingerprint,
-		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)},
+		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), Diagnostics: buildDiagnostics(diagnostics)},
 		Shell:           string(shell),
 	}, nil
 }
@@ -482,7 +491,7 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err != nil {
 		return err
 	}
-	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)}
+	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), Diagnostics: buildDiagnostics(diagnostics)}
 	cfg, err = applyRevisionManifest(paths, cfg, mode)
 	if err != nil {
 		return err
@@ -638,7 +647,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	}
 	defer func() { _ = guard.Release() }()
 	// Another process may have edited the config or relocked while we waited for the lock.
-	inputs, err := loadSourceInputs(paths)
+	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
 	}
@@ -668,7 +677,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 }
 
 func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) error {
-	inputs, err := loadSourceInputs(paths)
+	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
 	}
