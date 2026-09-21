@@ -711,9 +711,10 @@ func findFilter(text string) int {
 		character := text[index]
 		switch {
 		case quote != 0:
-			if character == '\\' {
+			switch character {
+			case '\\':
 				index++
-			} else if character == quote {
+			case quote:
 				quote = 0
 			}
 		case character == '"' || character == '\'':
@@ -751,9 +752,10 @@ func splitArguments(text string) []string {
 		character := text[index]
 		switch {
 		case quote != 0:
-			if character == '\\' {
+			switch character {
+			case '\\':
 				index++
-			} else if character == quote {
+			case quote:
 				quote = 0
 			}
 		case character == '"' || character == '\'':
