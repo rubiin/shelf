@@ -281,6 +281,8 @@ func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 			p.locked.ConfigFingerprint = text
 		case "profile":
 			p.locked.Profile = text
+		case "profile_match":
+			p.locked.ProfileMatch = text
 		case "shell":
 			p.locked.Shell = text
 		}
@@ -375,6 +377,8 @@ func rootFieldBit(key string) (uint8, bool) {
 		return 1 << 1, true
 	case "shell":
 		return 1 << 2, true
+	case "profile_match":
+		return 1 << 3, true
 	}
 	return 0, false
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -42,6 +43,9 @@ func Build(ctx Context, cfg config.Config, installer source.Installer, mode Mode
 
 func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Installer, mode Mode, concurrency int) (LockedConfig, error) {
 	locked := LockedConfig{ConfigFingerprint: ctx.fingerprint(), Profile: ctx.Profile, Shell: ctx.Shell, Env: cfg.Env, Templates: ctx.Templates}
+	if ctx.Profile != "" && !ProfileMatches(cfg, ctx.Profile) {
+		locked.ProfileMatch = "unmatched"
+	}
 	type task struct {
 		name   string
 		plugin config.RawPlugin
@@ -261,8 +265,60 @@ func Active(profiles []string, profile string) bool {
 	return false
 }
 
+func ProfileMatches(cfg config.Config, profile string) bool {
+	if profile == "" {
+		return true
+	}
+	for _, plugin := range cfg.Plugins {
+		for _, candidate := range plugin.Profiles {
+			if candidate == profile {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ApplyRevisionManifest(cfg config.Config, manifest RevisionManifest) config.Config {
+	entries := make(map[string]RevisionPlugin, len(manifest.Plugins))
+	for _, plugin := range manifest.Plugins {
+		entries[plugin.Name] = plugin
+	}
+	pinned := cfg
+	pinned.Plugins = make(map[string]config.RawPlugin, len(cfg.Plugins))
+	for name, plugin := range cfg.Plugins {
+		if entry, exists := entries[name]; exists && entry.Source == pluginSource(plugin) && entry.Rev != "" {
+			plugin.Rev = entry.Rev
+		}
+		pinned.Plugins[name] = plugin
+	}
+	return pinned
+}
+
+func RevisionManifestFrom(locked LockedConfig) RevisionManifest {
+	manifest := RevisionManifest{}
+	for _, plugin := range locked.Plugins {
+		if isRevisionSource(plugin.Source) && plugin.Rev != "" {
+			manifest.Plugins = append(manifest.Plugins, RevisionPlugin{Name: plugin.Name, Source: plugin.Source, Rev: plugin.Rev})
+		}
+	}
+	return manifest
+}
+
+func isRevisionSource(value string) bool {
+	return strings.HasPrefix(value, "github:") || strings.HasPrefix(value, "gist:") || strings.HasPrefix(value, "git:")
+}
+
 // Write encodes through a temp file and an atomic rename, so a crash cannot truncate the lock.
 func Write(path string, locked LockedConfig) error {
+	return writeTOML(path, locked)
+}
+
+func WriteRevisionManifest(path string, manifest RevisionManifest) error {
+	return writeTOML(path, manifest)
+}
+
+func writeTOML(path string, value any) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err
@@ -273,7 +329,7 @@ func Write(path string, locked LockedConfig) error {
 	}
 	temporaryName := temporary.Name()
 	defer func() { _ = os.Remove(temporaryName) }()
-	if err := toml.NewEncoder(temporary).Encode(locked); err != nil {
+	if err := toml.NewEncoder(temporary).Encode(value); err != nil {
 		_ = temporary.Close()
 		return err
 	}
@@ -286,6 +342,18 @@ func Write(path string, locked LockedConfig) error {
 // Read decodes a lock file, using the schema-specific reader when the contents match it.
 func Read(path string) (LockedConfig, error) {
 	return readLockFile(path)
+}
+
+func ReadRevisionManifest(path string) (RevisionManifest, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return RevisionManifest{}, err
+	}
+	var manifest RevisionManifest
+	if err := toml.Unmarshal(contents, &manifest); err != nil {
+		return RevisionManifest{}, err
+	}
+	return manifest, nil
 }
 
 func Verify(path string, ctx Context) (bool, error) {

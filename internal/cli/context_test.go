@@ -62,4 +62,10 @@ func TestLockFileCarriesTheProfileName(t *testing.T) {
 	if got := paths.LockFile("work"); got != filepath.Join("/tmp/data", "plugins.work.lock") {
 		t.Fatalf("profile lock file = %q", got)
 	}
+	if got := paths.RevisionLockFile(""); got != filepath.Join("/tmp/config", "plugins.lock") {
+		t.Fatalf("revision lock file = %q", got)
+	}
+	if got := paths.RevisionLockFile("work"); got != filepath.Join("/tmp/config", "plugins.work.lock") {
+		t.Fatalf("profile revision lock file = %q", got)
+	}
 }

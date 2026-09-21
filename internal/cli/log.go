@@ -54,3 +54,10 @@ func (l logger) verboseWarning(prefix, message string) {
 	}
 	_, _ = fmt.Fprintf(l.diagnostics, "%s %s\n", l.colors.warning(prefix), message)
 }
+
+func (l logger) warning(prefix, message string) {
+	if l.quiet {
+		return
+	}
+	_, _ = fmt.Fprintf(l.diagnostics, "%s %s\n", l.colors.warning(prefix), message)
+}

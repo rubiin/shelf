@@ -22,11 +22,22 @@ const (
 type LockedConfig struct {
 	ConfigFingerprint string            `toml:"config_fingerprint"`
 	Profile           string            `toml:"profile"`
+	ProfileMatch      string            `toml:"profile_match,omitempty"`
 	Shell             string            `toml:"shell"`
 	Env               map[string]string `toml:"env,omitempty"`
 	Plugins           []LockedPlugin    `toml:"plugins"`
 	// Templates must stay last: TOML tables and arrays of tables end the preceeding table.
 	Templates map[string]string `toml:"templates,omitempty"`
+}
+
+type RevisionManifest struct {
+	Plugins []RevisionPlugin `toml:"plugins"`
+}
+
+type RevisionPlugin struct {
+	Name   string `toml:"name"`
+	Source string `toml:"source"`
+	Rev    string `toml:"rev"`
 }
 
 type LockedPlugin struct {

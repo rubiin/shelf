@@ -101,6 +101,10 @@ Add the `eval` command to `.bashrc` or `.zshrc`. Each plugin is evaluated
 separately, so aliases and functions defined by one plugin are available to
 later plugins.
 
+After changing `plugins.toml`, run `shelf lock`. Use `shelf source` only from
+your shell startup file. It prints shell code to stdout; diagnostics stay on
+stderr.
+
 ## Build and test
 
 Requirements: Go 1.26 or newer and Git for Git sources.
@@ -200,7 +204,11 @@ another value is an error rather than a silent fallback.
 
 ## Configuration
 
-Basic plugin sources:
+`plugins.toml` has one top-level configuration and one source per plugin. Set
+`shell = "zsh"` or `shell = "bash"`; omit it to use the default Zsh shell.
+
+Each plugin must set exactly one of `github`, `gist`, `git`, `remote`, `local`,
+or `inline`:
 
 ```toml
 shell = "zsh"
@@ -230,20 +238,26 @@ inline = "echo loaded"
 github = "ohmyzsh/ohmyzsh"
 ```
 
+`github` and `gist` accept `owner/repository` identifiers. `git` accepts a Git
+URL or local Git repository. `remote` downloads one file. `local` uses an
+existing file or directory, and `inline` stores shell code directly in TOML.
+
 Plugin options include `use`, `apply`, `profiles`, `hooks`, `dir`, `file`, and
-`proto`. `proto` selects how `github` and `gist` sources are cloned: `https`
-(the default), `git`, or `ssh`. `shelf add --proto ssh` writes the same field.
-`use` accepts recursive glob patterns relative to the installed plugin
-directory.
+`proto`. `proto` selects the protocol for `github` and `gist`: `https`, `git`,
+or `ssh`. `shelf add --proto ssh` writes the same field. `use` accepts
+recursive glob patterns relative to the installed plugin directory.
 
 The optional `[env]` table is rendered before every plugin. Its keys must be
 shell variable names; its string values are shell assignment right-hand sides,
 so arrays can be written as `plugins = "(git npm macos)"`.
 
 A plugin that sets `optional = true` must use a `local` source. Shelf skips it
-when its path does not exist. A plugin that sets `profiles` only loads while one of those profiles is
-selected by `--profile` or `SHELF_PROFILE`; a plugin without `profiles` always
-loads.
+when its path does not exist.
+
+A plugin with `profiles = ["work"]` loads only when `--profile work` or
+`SHELF_PROFILE=work` is set. Plugins without `profiles` always load. Shelf
+warns when a selected profile matches no configured plugin, which catches most
+profile typos without preventing unprofiled plugins from loading.
 
 Templates engine: `{{ value }}` expressions with `| nl` filters,
 `{% if %} … {% else if %} … {% else %} … {% endif %}` conditionals, and
@@ -266,20 +280,54 @@ under `$XDG_DATA_HOME/shelf/downloads/<host>/<path>`. Inline plugins install
 nothing: their text is recorded in the lock and rendered as a template, so each
 inline plugin can use `{{ name }}` and its hooks.
 
-Locking records the resolved templates, the installed sources, and the selected
-files under:
+Shelf maintains a runtime lock with resolved templates, installed paths, and
+selected files under:
 
 ```text
 $XDG_DATA_HOME/shelf/plugins.lock
 $XDG_DATA_HOME/shelf/plugins.<profile>.lock
 ```
 
-`source` verifies the lock context and selected files. It regenerates the lock
-when the configuration, profile, shell, or installed files changed. Commands
-take a shared lock on the configuration directory while reading and an
-exclusive lock while writing, so concurrent shells wait instead of racing.
+`source` verifies the runtime lock context and selected files. It regenerates
+the lock when the configuration, profile, shell, or installed files changed.
+Commands take a shared lock on the configuration directory while reading and
+an exclusive lock while writing, so concurrent shells wait instead of racing.
 Installed sources that are no longer configured are pruned by `lock`, by
 `update`, and by `source` when it relocks.
+
+### Revision lockfiles
+
+`shelf lock` also writes a VCS-friendly revision manifest beside the
+configuration file:
+
+```text
+$XDG_CONFIG_HOME/shelf/plugins.lock
+$XDG_CONFIG_HOME/shelf/plugins.<profile>.lock
+```
+
+This manifest contains only Git, GitHub, and Gist plugin names, sources, and
+resolved commit revisions. Commit it with `plugins.toml` to make plugin
+versions reproducible. When present, `shelf lock`, `shelf lock --reinstall`,
+and `shelf source --relock` use its matching revisions. `shelf lock --update`
+and `shelf update --lock` fetch current revisions and refresh the manifest.
+Local, remote, and inline plugins are intentionally omitted.
+
+Use normal locking for repeatable installs:
+
+```sh
+shelf lock                 # create or use the tracked revision manifest
+shelf lock --reinstall     # rebuild installed Git sources at pinned revisions
+shelf lock --update        # fetch current revisions and rewrite the manifest
+```
+
+The runtime lock under the data directory is not intended for version control.
+It includes local paths and selected files so `shelf source` can start without
+decoding the full configuration. Commit the revision manifest under the config
+directory instead.
+
+A selected `--profile` or `SHELF_PROFILE` that matches no configured plugin
+emits a warning. Unprofiled plugins still load, which keeps an accidental
+profile typo from disabling the rest of a configuration.
 
 Diagnostics go to stderr: `Loaded` and `Locked` headers, right-aligned
 `Checked` and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and

@@ -131,8 +131,8 @@ func TestLockStoresLockfileInDataDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "plugins.lock")); err != nil {
 		t.Fatalf("lock file missing in data directory: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); err == nil {
-		t.Fatal("lock file was written under the config directory")
+	if _, err := os.Stat(filepath.Join(configDir, "plugins.lock")); err != nil {
+		t.Fatalf("revision lock file missing in config directory: %v", err)
 	}
 }
 
@@ -197,6 +197,31 @@ func TestProfileExcludesPluginsWithoutASelectedProfile(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), "name = \"always\"") {
 		t.Fatalf("plugin without profiles was skipped: %s", contents)
+	}
+}
+
+func TestLockWarnsForUnmatchedProfile(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "plugins.toml")
+	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_PROFILE", "typo")
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "profile \"typo\" matches no plugins") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
@@ -964,7 +989,7 @@ func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
 	t.Setenv("SHELF_DATA_DIR", dataDir)
 
 	locked := lock.LockedConfig{
-		ConfigFingerprint: fingerprintWithShell(contents),
+		ConfigFingerprint: fingerprintWithRevision(fingerprintWithShell(contents), filepath.Join(configDir, "plugins.lock")),
 		Shell:             "zsh",
 		Templates:         map[string]string{"source": "source \"{{ files.0 }}\"\n"},
 		Plugins:           []lock.LockedPlugin{{Name: "demo", Inline: "echo demo"}},

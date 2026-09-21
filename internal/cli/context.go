@@ -48,3 +48,10 @@ func (paths Paths) LockFile(profile string) string {
 	}
 	return filepath.Join(paths.DataDirectory, "plugins."+profile+".lock")
 }
+
+func (paths Paths) RevisionLockFile(profile string) string {
+	if profile == "" {
+		return filepath.Join(paths.ConfigDirectory, "plugins.lock")
+	}
+	return filepath.Join(paths.ConfigDirectory, "plugins."+profile+".lock")
+}

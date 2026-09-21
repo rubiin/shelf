@@ -334,9 +334,10 @@ func firstNonEmpty(values ...string) string {
 
 // sourceInputs holds the config-file derivations a source run needs.
 type sourceInputs struct {
-	Config  config.Config
-	Context lock.Context
-	Shell   string
+	Config          config.Config
+	BaseFingerprint string
+	Context         lock.Context
+	Shell           string
 }
 
 // loadSourceInputs reads and validates the config, resolving the lock context and shell.
@@ -348,14 +349,17 @@ func loadSourceInputs(paths Paths) (sourceInputs, error) {
 	if err := config.Validate(cfg); err != nil {
 		return sourceInputs{}, err
 	}
+	baseFingerprint := fingerprint
+	fingerprint = fingerprintWithRevision(baseFingerprint, paths.RevisionLockFile(profile))
 	shell, err := resolveShell(cfg)
 	if err != nil {
 		return sourceInputs{}, err
 	}
 	return sourceInputs{
-		Config:  cfg,
-		Context: lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)},
-		Shell:   string(shell),
+		Config:          cfg,
+		BaseFingerprint: baseFingerprint,
+		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)},
+		Shell:           string(shell),
 	}, nil
 }
 
@@ -384,6 +388,14 @@ func fingerprintWithShell(contents []byte) string {
 	return lock.Fingerprint([]byte(lock.Fingerprint(contents) + "\n" + os.Getenv("SHELF_SHELL")))
 }
 
+func fingerprintWithRevision(fingerprint, revisionPath string) string {
+	contents, err := os.ReadFile(revisionPath)
+	if err != nil {
+		return lock.Fingerprint([]byte(fingerprint + "\n"))
+	}
+	return lock.Fingerprint([]byte(fingerprint + "\n" + lock.Fingerprint(contents)))
+}
+
 // unlockedLock reads the lock and verifies it against the config's fingerprint without decoding the
 // config, which is the shell-startup path. A caller that gets false relocks through the full path.
 func unlockedLock(paths Paths, lockPath string) (lock.LockedConfig, bool) {
@@ -397,7 +409,7 @@ func unlockedLock(paths Paths, lockPath string) (lock.LockedConfig, bool) {
 	}
 	read := lock.Context{
 		ConfigFile:        paths.ConfigFile,
-		ConfigFingerprint: fingerprintWithShell(contents),
+		ConfigFingerprint: fingerprintWithRevision(fingerprintWithShell(contents), paths.RevisionLockFile(profile)),
 		DataDirectory:     paths.DataDirectory,
 		Profile:           profile,
 		Shell:             locked.Shell,
@@ -414,6 +426,9 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 		return err
 	}
 	log := newLogger(diagnostics)
+	if profile != "" && !lock.ProfileMatches(cfg, profile) {
+		log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
+	}
 	log.header("Loaded", displayPath(paths.ConfigFile))
 	for _, name := range lock.PluginNames(cfg) {
 		plugin := cfg.Plugins[name]
@@ -432,16 +447,39 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 		return err
 	}
 	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates)}
+	cfg, err = applyRevisionManifest(paths, cfg, mode)
+	if err != nil {
+		return err
+	}
 	locked, err := lock.BuildWithConcurrency(context, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
 	if err != nil {
 		return err
 	}
+	revisionPath := paths.RevisionLockFile(profile)
+	if err := lock.WriteRevisionManifest(revisionPath, lock.RevisionManifestFrom(locked)); err != nil {
+		return err
+	}
+	locked.ConfigFingerprint = fingerprintWithRevision(fingerprint, revisionPath)
 	lockPath := paths.LockFile(profile)
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
 	log.header("Locked", displayPath(lockPath))
 	return nil
+}
+
+func applyRevisionManifest(paths Paths, cfg config.Config, mode lock.Mode) (config.Config, error) {
+	if mode == lock.ModeUpdate {
+		return cfg, nil
+	}
+	manifest, err := lock.ReadRevisionManifest(paths.RevisionLockFile(profile))
+	if os.IsNotExist(err) {
+		return cfg, nil
+	}
+	if err != nil {
+		return config.Config{}, err
+	}
+	return lock.ApplyRevisionManifest(cfg, manifest), nil
 }
 
 func pluginSource(plugin config.RawPlugin) string {
@@ -546,6 +584,9 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 		if locked, valid := unlockedLock(paths, lockPath); valid {
 			defer func() { _ = guard.Release() }()
 			log.verboseHeader("Unlocked", displayPath(lockPath))
+			if locked.ProfileMatch == "unmatched" {
+				log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
+			}
 			if err := lock.Restore(locked, source.NewInstaller(paths.DataDirectory), concurrency); err != nil {
 				return err
 			}
@@ -568,10 +609,22 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	if err := cleanUnownedSources(paths.DataDirectory, inputs.Config, log); err != nil {
 		return err
 	}
+	if profile != "" && !lock.ProfileMatches(inputs.Config, profile) {
+		log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
+	}
+	inputs.Config, err = applyRevisionManifest(paths, inputs.Config, mode)
+	if err != nil {
+		return err
+	}
 	locked, err := lock.BuildWithConcurrency(inputs.Context, inputs.Config, source.NewInstaller(paths.DataDirectory), mode, concurrency)
 	if err != nil {
 		return err
 	}
+	revisionPath := paths.RevisionLockFile(profile)
+	if err := lock.WriteRevisionManifest(revisionPath, lock.RevisionManifestFrom(locked)); err != nil {
+		return err
+	}
+	locked.ConfigFingerprint = fingerprintWithRevision(inputs.BaseFingerprint, revisionPath)
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
@@ -671,6 +724,7 @@ func pluginStatus(paths Paths, output io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
+	fingerprint = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
 	shell, err := resolveShell(cfg)
 	if err != nil {
 		return err
@@ -719,6 +773,7 @@ func doctor(paths Paths, output io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
+	fingerprint = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
 	if _, err := fmt.Fprintln(output, "config: ok"); err != nil {
 		return err
 	}

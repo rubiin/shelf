@@ -248,6 +248,55 @@ func TestBuildRecordsGitPluginSourceAndRevision(t *testing.T) {
 	}
 }
 
+func TestRevisionManifestPersistsGitRevisions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.lock")
+	manifest := RevisionManifest{Plugins: []RevisionPlugin{{
+		Name:   "zsh-defer",
+		Source: "github:romkatv/zsh-defer",
+		Rev:    "53a26e287fbbe2dcebb3aa1801546c6de32416fa",
+	}}}
+	if err := WriteRevisionManifest(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadRevisionManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(loaded.Plugins, manifest.Plugins, func(left, right RevisionPlugin) bool { return left == right }) {
+		t.Fatalf("manifest = %+v, want %+v", loaded, manifest)
+	}
+}
+
+func TestApplyRevisionManifestPinsMatchingGitSources(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"defer": {GitHub: "romkatv/zsh-defer", Branch: "main"},
+		"other": {GitHub: "example/other"},
+	}}
+	manifest := RevisionManifest{Plugins: []RevisionPlugin{
+		{Name: "defer", Source: "github:romkatv/zsh-defer", Rev: "53a26e287fbbe2dcebb3aa1801546c6de32416fa"},
+		{Name: "other", Source: "github:example/different", Rev: "ignored"},
+	}}
+	pinned := ApplyRevisionManifest(cfg, manifest)
+	if pinned.Plugins["defer"].Rev != "53a26e287fbbe2dcebb3aa1801546c6de32416fa" {
+		t.Fatalf("pinned revision = %q", pinned.Plugins["defer"].Rev)
+	}
+	if pinned.Plugins["other"].Rev != "" {
+		t.Fatalf("mismatched source revision = %q", pinned.Plugins["other"].Rev)
+	}
+}
+
+func TestRevisionManifestFromLockedConfigExcludesNonGitPlugins(t *testing.T) {
+	locked := LockedConfig{Plugins: []LockedPlugin{
+		{Name: "git", Source: "github:example/plugin", Rev: "abc"},
+		{Name: "local", Rev: "def"},
+		{Name: "remote", Source: "remote:https://example.test/plugin", Rev: "ghi"},
+	}}
+	manifest := RevisionManifestFrom(locked)
+	if len(manifest.Plugins) != 1 || manifest.Plugins[0].Name != "git" {
+		t.Fatalf("manifest plugins = %+v", manifest.Plugins)
+	}
+}
+
 func TestBuildSelectsConfiguredPluginFile(t *testing.T) {
 	directory := t.TempDir()
 	file := filepath.Join(directory, "sudo.plugin.zsh")
