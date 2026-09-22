@@ -67,4 +67,6 @@ type LockedPlugin struct {
 	Depth     *int     `toml:"depth,omitempty"`
 	// Frozen records that the plugin keeps its pinned version on update.
 	Frozen bool `toml:"frozen,omitempty"`
+	// Ignore records the globs that excluded files from the selection, so re-locks and info see the same view.
+	Ignore []string `toml:"ignore,omitempty"`
 }

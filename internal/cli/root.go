@@ -241,7 +241,7 @@ func NewRoot() *cobra.Command {
 	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addDir, addFile string
-	var addUse, addApply, addBuild, addProfiles, addCloneOpts []string
+	var addUse, addIgnore, addApply, addBuild, addProfiles, addCloneOpts []string
 	var addHooks map[string]string
 	var addDepth int
 	var addFrozen bool
@@ -255,7 +255,7 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				if err := config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth, Frozen: addFrozen}); err != nil {
+				if err := config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Ignore: addIgnore, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth, Frozen: addFrozen}); err != nil {
 					return err
 				}
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s added: %s\n", writerColors(cmd.OutOrStdout()).success(successMark), args[0])
@@ -280,6 +280,7 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addDir, "dir", "", "plugin subdirectory")
 	addCommand.Flags().StringVar(&addFile, "file", "", "plugin file")
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
+	addCommand.Flags().StringSliceVar(&addIgnore, "ignore", nil, "plugin file globs to exclude from loading")
 	addCommand.Flags().StringSliceVar(&addApply, "apply", nil, "template names")
 	addCommand.Flags().StringArrayVar(&addBuild, "build", nil, "install-time build commands")
 	addCommand.Flags().StringSliceVar(&addProfiles, "profiles", nil, "plugin profiles")

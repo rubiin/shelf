@@ -21,6 +21,31 @@ func TestScriptSourcesLockedFiles(t *testing.T) {
 	}
 }
 
+func TestScriptDoesNotSourceIgnoredFiles(t *testing.T) {
+	// The ignore globs already dropped the test file from the lock's selection, so neither shell renders it.
+	tests := []struct {
+		shell string
+		want  string
+	}{
+		{shell: "bash", want: "eval 'source \"/tmp/demo.plugin.zsh\"\n'\n"},
+		{shell: "zsh", want: "eval 'source \"/tmp/demo.plugin.zsh\"\n'\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.shell, func(t *testing.T) {
+			script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+				Name:  "demo",
+				Files: []string{"/tmp/demo.plugin.zsh"},
+			}}}, test.shell)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if script != test.want {
+				t.Fatalf("%s script = %q, want %q", test.shell, script, test.want)
+			}
+		})
+	}
+}
+
 func TestScriptAssignsEnvironmentBeforePlugins(t *testing.T) {
 	script, err := Script(lock.LockedConfig{
 		Env:     map[string]string{"plugins": "(git npm macos)", "ZSH_THEME": "robbyrussell"},

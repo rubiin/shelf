@@ -19,7 +19,7 @@
 - Frozen pins: `frozen = true` keeps a plugin's installed version until `--force` or `--reinstall`.
 - Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
 - Per-plugin `cloneopts` and clone `depth` for Git sources, recorded in the lock.
-- Bash and Zsh output with per-plugin file globs and hooks.
+- Bash and Zsh output with per-plugin file globs (`use`) and exclusions (`ignore`).
 - Profiles, an `[env]` block, and custom apply templates.
 - Locked installs with a revision manifest for reproducible setups.
 - Concurrent installs, automatic cleanup of removed plugins, and `update`/`reinstall`/`relock`.
@@ -257,11 +257,20 @@ github = "ohmyzsh/ohmyzsh"
 a Git URL or local Git repository. `remote` downloads one file. `local` uses an
 existing file or directory, and `inline` stores shell code directly in TOML.
 
-Plugin options include `use`, `apply`, `profiles`, `hooks`, `build`, `dir`, `file`, `proto`,
+Plugin options include `use`, `ignore`, `apply`, `profiles`, `hooks`, `build`, `dir`, `file`, `proto`,
 `cloneopts`, `depth`, and `frozen`. `proto` picks the forge protocol (`github`, `gist`,
 `gitlab`, `bitbucket`, `codeberg`), one of `https`, `git`, or `ssh`;
 `shelf add --proto ssh` writes the same field. `use` takes recursive glob
-patterns relative to the installed plugin directory.
+patterns relative to the installed plugin directory; `ignore` takes the same
+globs and excludes whichever files `use` (or the shell defaults) selected, so
+a plugin's own test trees never load:
+
+```toml
+[plugins.myplugin]
+github = "owner/myplugin"
+use = ["**/*.zsh"]
+ignore = ["**/test*", "**/tests/*"]
+```
 
 Git plugins are cloned shallowly (`--depth 1`) by default. `depth` overrides the
 clone depth: `depth = 0` clones full history, and a positive value fetches that

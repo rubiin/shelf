@@ -18,7 +18,7 @@ func TestSelectFilesUsesFirstMatchForShellDefaults(t *testing.T) {
 		}
 	}
 
-	got, err := selectFiles(directory, "zsh-autosuggestions", "zsh", nil, true)
+	got, err := selectFiles(directory, "zsh-autosuggestions", "zsh", nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestSelectFilesUsesShellSpecificDefaultPriority(t *testing.T) {
 				}
 			}
 
-			got, err := selectFiles(directory, "demo", test.shell, nil, true)
+			got, err := selectFiles(directory, "demo", test.shell, nil, true, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,7 +82,7 @@ func TestSelectFilesCollectsExplicitUsePatterns(t *testing.T) {
 		}
 	}
 
-	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "*.md"}, false)
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "*.md"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestSelectFilesMatchesNestedAndHiddenPaths(t *testing.T) {
 		}
 	}
 
-	got, err := selectFiles(directory, "demo", "zsh", []string{"**/*.zsh"}, false)
+	got, err := selectFiles(directory, "demo", "zsh", []string{"**/*.zsh"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestSelectFilesMatchesPatternsWithLeadingDotSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := selectFiles(directory, "demo", "zsh", []string{"./*.zsh"}, false)
+	got, err := selectFiles(directory, "demo", "zsh", []string{"./*.zsh"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestCollectFilesSkipsGitMetadata(t *testing.T) {
 	}
 
 	// And through selection, where a .git file must never be picked up by a pattern.
-	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "*.sh"}, false)
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "*.sh"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestSelectFilesSkipsDirectoriesNamedLikeMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh"}, false)
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestSelectFilesSkipsDirectoriesNamedLikeMatches(t *testing.T) {
 }
 
 func TestSelectFilesIgnoresMissingDirectory(t *testing.T) {
-	got, err := selectFiles(filepath.Join(t.TempDir(), "absent"), "demo", "zsh", []string{"*.zsh"}, false)
+	got, err := selectFiles(filepath.Join(t.TempDir(), "absent"), "demo", "zsh", []string{"*.zsh"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestSelectFilesIgnoresMissingDirectory(t *testing.T) {
 }
 
 func TestSelectFilesRejectsInvalidPattern(t *testing.T) {
-	if _, err := selectFiles(t.TempDir(), "demo", "zsh", []string{"[unclosed"}, false); err == nil {
+	if _, err := selectFiles(t.TempDir(), "demo", "zsh", []string{"[unclosed"}, false, nil); err == nil {
 		t.Fatal("invalid pattern was accepted")
 	}
 }
@@ -227,7 +227,7 @@ func TestSelectFilesDeduplicatesExplicitMatches(t *testing.T) {
 		}
 	}
 
-	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "demo.*", "*.sh"}, false)
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "demo.*", "*.sh"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,5 +240,92 @@ func TestSelectFilesDeduplicatesExplicitMatches(t *testing.T) {
 		if got[index] != want[index] {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+func TestSelectFilesAppliesIgnoreGlobs(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"demo.plugin.zsh", "test-helper.zsh", "tests/helper.zsh", "README.md"} {
+		path := filepath.Join(directory, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("echo test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := selectFiles(directory, "demo", "zsh", []string{"**/*.zsh", "*.md"}, false, []string{"**/test*", "**/tests/*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// test-helper.zsh matches **/test* and tests/helper.zsh matches **/tests/*, leaving the plugin file and the readme.
+	want := []string{filepath.Join(directory, "README.md"), filepath.Join(directory, "demo.plugin.zsh")}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestSelectFilesAppliesIgnoreToDefaultMatches(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"demo.plugin.zsh", "demo.sh"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("echo test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Default matches stop at the first selecting pattern, then the ignore pass drops it as well.
+	got, err := selectFiles(directory, "demo", "zsh", nil, true, []string{"*.plugin.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want an empty selection when the default match is ignored", got)
+	}
+}
+
+func TestSelectFilesIgnoreCanEmptyTheSelection(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"demo.zsh", "demo.plugin.zsh"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("echo test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh"}, false, []string{"*.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want an empty selection when everything is ignored", got)
+	}
+}
+
+func TestSelectFilesIgnoreSupportsNameSubstitution(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"demo.plugin.zsh", "demo.zsh"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("echo test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh"}, false, []string{"{{ name }}.plugin.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(directory, "demo.zsh")}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestSelectFilesRejectsInvalidIgnorePattern(t *testing.T) {
+	if _, err := selectFiles(t.TempDir(), "demo", "zsh", []string{"*.zsh"}, false, []string{"[unclosed"}); err == nil {
+		t.Fatal("invalid ignore pattern was accepted")
 	}
 }

@@ -11,27 +11,29 @@ type Config struct {
 }
 
 type RawPlugin struct {
-	GitHub    string            `toml:"github"`
-	Git       string            `toml:"git"`
-	Gist      string            `toml:"gist"`
-	GitLab    string            `toml:"gitlab"`
-	Bitbucket string            `toml:"bitbucket"`
-	Codeberg  string            `toml:"codeberg"`
-	Remote    string            `toml:"remote"`
-	Local     string            `toml:"local"`
-	Optional  bool              `toml:"optional"`
-	Inline    string            `toml:"inline"`
-	Rev       string            `toml:"rev"`
-	Branch    string            `toml:"branch"`
-	Tag       string            `toml:"tag"`
-	Proto     string            `toml:"proto"`
-	Dir       string            `toml:"dir"`
-	File      string            `toml:"file"`
-	Use       []string          `toml:"use"`
-	Apply     []string          `toml:"apply"`
-	Build     []string          `toml:"build"`
-	Profiles  []string          `toml:"profiles"`
-	Hooks     map[string]string `toml:"hooks"`
+	GitHub    string   `toml:"github"`
+	Git       string   `toml:"git"`
+	Gist      string   `toml:"gist"`
+	GitLab    string   `toml:"gitlab"`
+	Bitbucket string   `toml:"bitbucket"`
+	Codeberg  string   `toml:"codeberg"`
+	Remote    string   `toml:"remote"`
+	Local     string   `toml:"local"`
+	Optional  bool     `toml:"optional"`
+	Inline    string   `toml:"inline"`
+	Rev       string   `toml:"rev"`
+	Branch    string   `toml:"branch"`
+	Tag       string   `toml:"tag"`
+	Proto     string   `toml:"proto"`
+	Dir       string   `toml:"dir"`
+	File      string   `toml:"file"`
+	Use       []string `toml:"use"`
+	// Ignore excludes files selected by use (or the shell defaults) from loading.
+	Ignore   []string          `toml:"ignore"`
+	Apply    []string          `toml:"apply"`
+	Build    []string          `toml:"build"`
+	Profiles []string          `toml:"profiles"`
+	Hooks    map[string]string `toml:"hooks"`
 	// Frozen pins the installed version: update leaves it alone unless forced or reinstalled.
 	Frozen bool `toml:"frozen"`
 	// CloneOpts are extra arguments passed to git clone for git, github, and gist sources.

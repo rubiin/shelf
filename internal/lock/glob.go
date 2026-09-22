@@ -38,7 +38,7 @@ func defaultMatches(shell string) []string {
 	}
 }
 
-func selectFiles(directory, name, shell string, patterns []string, firstMatch bool) ([]string, error) {
+func selectFiles(directory, name, shell string, patterns []string, firstMatch bool, ignored []string) ([]string, error) {
 	if len(patterns) == 0 {
 		patterns = defaultMatches(shell)
 		firstMatch = true
@@ -71,6 +71,11 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 			break
 		}
 	}
+	// The ignore pass drops files the selection matched, so test trees never load.
+	matched, err = dropIgnored(matched, name, ignored)
+	if err != nil {
+		return nil, err
+	}
 	// Every pattern is walked together, so the selection is ordered by file name.
 	sort.SliceStable(matched, func(left, right int) bool {
 		return filepath.Base(matched[left]) < filepath.Base(matched[right])
@@ -86,6 +91,42 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 		files = append(files, match)
 	}
 	return files, nil
+}
+
+// dropIgnored filters matched relative paths against the ignore globs, substituting `{{ name }}`
+// exactly like the use patterns do. Patterns are validated up front so a typo fails even when the
+// selection is empty.
+func dropIgnored(matched []string, name string, ignored []string) ([]string, error) {
+	if len(ignored) == 0 {
+		return matched, nil
+	}
+	patterns := make([]string, len(ignored))
+	for index, pattern := range ignored {
+		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
+		rendered = path.Clean(rendered)
+		if !doublestar.ValidatePattern(rendered) {
+			return nil, fmt.Errorf("invalid ignore pattern: %s", pattern)
+		}
+		patterns[index] = rendered
+	}
+	var kept []string
+	for _, candidate := range matched {
+		drop := false
+		for _, pattern := range patterns {
+			ok, err := doublestar.Match(pattern, candidate)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept, nil
 }
 
 // collectFiles walks directory once and returns its non-directory paths, slash-separated.

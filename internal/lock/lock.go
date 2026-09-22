@@ -176,7 +176,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 			}
 			firstMatch = true
 		}
-		files, err = selectFiles(installed.Directory, name, ctx.Shell, patterns, firstMatch)
+		files, err = selectFiles(installed.Directory, name, ctx.Shell, patterns, firstMatch, plugin.Ignore)
 		if err != nil {
 			return LockedPlugin{}, fmt.Errorf("select plugin %q files: %w", name, err)
 		}
@@ -188,7 +188,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if len(apply) == 0 {
 		apply = []string{"source"}
 	}
-	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, ETag: installed.ETag, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth, Frozen: plugin.Frozen}, nil
+	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, ETag: installed.ETag, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth, Frozen: plugin.Frozen, Ignore: plugin.Ignore}, nil
 }
 
 // PluginETags maps each plugin's name to the remote validator its lock entry recorded, for a conditional GET on the next update.

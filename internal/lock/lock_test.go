@@ -614,6 +614,32 @@ func TestBuildUnionsEveryUsePattern(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesAndRecordsIgnoreGlobs(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"demo.plugin.zsh", "test-helper.zsh", "demo.sh"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("echo "+name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "rubiin/demo", Use: []string{"*.zsh", "*.sh"}, Ignore: []string{"**/test*"}},
+	}}
+
+	locked, err := Build(Context{Shell: "zsh"}, cfg, directoryOnlyInstaller{directory: directory}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// test-helper.zsh matched `*.zsh` but the ignore glob excluded it; the lock records the globs too.
+	want := []string{filepath.Join(directory, "demo.plugin.zsh"), filepath.Join(directory, "demo.sh")}
+	if len(locked.Plugins) != 1 || !slices.Equal(locked.Plugins[0].Files, want) {
+		t.Fatalf("selected files = %v, want %v", locked.Plugins[0].Files, want)
+	}
+	plugin := locked.Plugins[0]
+	if !slices.Equal(plugin.Ignore, []string{"**/test*"}) {
+		t.Fatalf("locked ignore = %v, want [**/test*]", plugin.Ignore)
+	}
+}
+
 type buildInstaller struct {
 	directory string
 	root      string

@@ -251,6 +251,40 @@ func TestUpdateInstallsTheLatestRelease(t *testing.T) {
 	}
 }
 
+func TestUpdateRefusesAnUnwritableTargetDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, downloads := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	directory := t.TempDir()
+	target := filepath.Join(directory, "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o700) })
+
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target}); err == nil {
+		t.Fatal("self-update succeeded in an unwritable directory")
+	} else if !strings.Contains(err.Error(), "not writable") {
+		t.Errorf("error = %v, want a not-writable refusal", err)
+	}
+	if *downloads != 0 {
+		t.Errorf("refusal downloaded %d assets, want 0", *downloads)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "old" {
+		t.Errorf("binary changed: %q, %v", contents, err)
+	}
+}
+
 func TestUpdateRejectsAChecksumMismatch(t *testing.T) {
 	archive := buildArchive(t, "new")
 	archiveName := archiveNameFor(t)

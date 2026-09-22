@@ -180,6 +180,23 @@ func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
 	}
 }
 
+func TestAddWritesIgnoreGlobs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(path, "demo", RawPlugin{GitHub: "rubiin/demo", Use: []string{"**/*.zsh"}, Ignore: []string{"**/test*", "**/tests/*"}}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "ignore = [\"**/test*\", \"**/tests/*\"]") {
+		t.Fatalf("add did not write ignore: %s", contents)
+	}
+}
+
 func TestAddWritesMultiForgeFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {

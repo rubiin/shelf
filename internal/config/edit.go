@@ -213,6 +213,9 @@ func encodePlugin(name string, plugin RawPlugin) string {
 	if len(plugin.Use) > 0 {
 		lines = append(lines, "use = "+tomlArray(plugin.Use))
 	}
+	if len(plugin.Ignore) > 0 {
+		lines = append(lines, "ignore = "+tomlArray(plugin.Ignore))
+	}
 	if len(plugin.Apply) > 0 {
 		lines = append(lines, "apply = "+tomlArray(plugin.Apply))
 	}

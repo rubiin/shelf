@@ -113,6 +113,9 @@ func Update(ctx context.Context, options Options) (Result, error) {
 	if !ok {
 		return Result{}, fmt.Errorf("release %s has no %s asset", latest.TagName, name)
 	}
+	if err := checkWritable(options.Target); err != nil {
+		return Result{}, err
+	}
 	logf(options.Diagnostics, "Downloading %s", name)
 	archive, err := download(ctx, url)
 	if err != nil {
@@ -131,7 +134,7 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		return Result{}, err
 	}
 	if err := installBinary(options.Target, binary); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("replace %s: %w", options.Target, err)
 	}
 	return Result{Updated: true, Previous: options.CurrentVersion, Next: next}, nil
 }
@@ -267,6 +270,23 @@ func extractBinary(archive []byte) ([]byte, error) {
 			return contents, nil
 		}
 	}
+}
+
+// checkWritable verifies that the replacement binary can be installed next to
+// target: the install renames a sibling temp file over target, so the target's
+// directory must allow creating one. It runs before the release download so a
+// package-managed install (e.g. /usr/bin) fails fast with an actionable error
+// instead of a bare permission-denied after the download and verification work.
+func checkWritable(target string) error {
+	directory := filepath.Dir(target)
+	temporary, err := os.CreateTemp(directory, ".shelf-update-*")
+	if err != nil {
+		return fmt.Errorf("self-update refused: cannot install next to %s because %s is not writable; install shelf in a user-writable directory (like ~/.local/bin) or update through your package manager: %w", target, directory, err)
+	}
+	name := temporary.Name()
+	_ = temporary.Close()
+	_ = os.Remove(name)
+	return nil
 }
 
 // installBinary writes contents to a sibling temp file and renames it over target,
