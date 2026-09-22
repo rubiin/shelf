@@ -61,6 +61,12 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		}
 	}
 	if ref != "" {
+		// A shallow clone may not hold a pinned revision reached after its tip; check locally and fetch the missing object before checkout.
+		if err := runGitIn(ctx, directory, "cat-file", "-e", ref+"^{commit}"); err != nil {
+			if err := runGitIn(ctx, directory, "fetch", "--depth", "1", "origin", ref); err != nil {
+				return Installed{}, err
+			}
+		}
 		if err := runGitIn(ctx, directory, "checkout", "--detach", ref); err != nil {
 			return Installed{}, err
 		}
@@ -69,7 +75,11 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 	if err != nil {
 		return Installed{}, err
 	}
-	return Installed{Directory: sourceDirectory(directory, request.Dir), Root: directory, Revision: strings.TrimSpace(revision)}, nil
+	sourceDir, err := sourceDirectory(directory, request.Dir)
+	if err != nil {
+		return Installed{}, err
+	}
+	return Installed{Directory: sourceDir, Root: directory, Revision: strings.TrimSpace(revision)}, nil
 }
 
 func runGit(ctx context.Context, args ...string) error {

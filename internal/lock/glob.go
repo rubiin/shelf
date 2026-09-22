@@ -103,6 +103,10 @@ func collectFiles(directory string) ([]string, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
+			// A plugin's own git metadata can never match a source pattern, so skip it wholesale.
+			if entry.Name() == ".git" {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		relative, err := filepath.Rel(directory, path)

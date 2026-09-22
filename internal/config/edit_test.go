@@ -258,6 +258,73 @@ func TestRemoveLeavesDottedKeysThatBelongToAnotherTable(t *testing.T) {
 	}
 }
 
+func TestRemoveDeletesMultiLineDottedKeyValue(t *testing.T) {
+	// A dotted-key value split across lines must be dropped whole, not left as orphaned lines.
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	original := "shell = \"zsh\"\n\nplugins.foo.apply = [\n  \"a\",\n  \"b\",\n]\nplugins.foo.inline = \"echo foo\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "foo"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "foo") {
+		t.Fatalf("remove left the multi-line plugin behind: %s", contents)
+	}
+	if !strings.Contains(string(contents), "[plugins.kept]") {
+		t.Fatalf("remove lost the unrelated plugin: %s", contents)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("removed config no longer decodes: %v\n%s", err, contents)
+	}
+}
+
+func TestRemoveIgnoresBracketsInsideQuotedValues(t *testing.T) {
+	// Array elements containing "[" and "]" must not close the multi-line value early.
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	original := "shell = \"zsh\"\n\nplugins.foo.use = [\n  \"a]b[\",\n  \"c\",\n]\n\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "foo"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "foo") {
+		t.Fatalf("remove cut the multi-line value short: %s", contents)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("removed config no longer decodes: %v\n%s", err, contents)
+	}
+}
+
+func TestRemoveRefusesToWriteACorruptConfig(t *testing.T) {
+	// A multi-line value the line scanner cannot track (here a """ string) must fail the
+	// round-trip validation instead of silently writing orphaned lines to disk.
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	original := "shell = \"zsh\"\n\nplugins.gone.inline = \"\"\"\necho first\necho second\"\"\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "gone"); err == nil {
+		t.Fatal("remove wrote a config that no longer decodes")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != original {
+		t.Fatalf("failed remove changed the config: %s", contents)
+	}
+}
+
 func TestRemoveKeepsFileMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugins.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n\n[plugins.gone]\ninline = \"echo gone\"\n"), 0o640); err != nil {

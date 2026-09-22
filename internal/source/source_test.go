@@ -589,6 +589,33 @@ func TestInstallerFallsBackToFullCloneForPinnedRevision(t *testing.T) {
 	}
 }
 
+func TestInstallerFetchesPinnedRevisionOutsideShallowHistory(t *testing.T) {
+	// A repository can move past what a shallow clone holds; reinstalling a pinned
+	// revision without updating must fetch it rather than fail "reference is not a tree".
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	sourceURL := "file://" + repository
+	if installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL}); err != nil {
+		t.Fatal(err)
+	} else if installed.Revision != first {
+		t.Fatalf("revision = %q, want the shallow tip %q", installed.Revision, first)
+	}
+	// The remote advances to a commit the local shallow clone has never seen.
+	second := commitFile(t, repository, "plugin.zsh", "echo second\n")
+
+	installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Ref: second, Update: false})
+	if err != nil {
+		t.Fatalf("install a pinned revision outside the shallow history: %v", err)
+	}
+	if installed.Revision != second {
+		t.Fatalf("revision = %q, want the pinned commit %q", installed.Revision, second)
+	}
+}
+
 // commitFile commits contents to a file in the repository directory and returns the revision, seeding the git repository on first use.
 func commitFile(t *testing.T, directory, file, contents string) string {
 	t.Helper()
@@ -612,6 +639,35 @@ func commitFile(t *testing.T, directory, file, contents string) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func TestInstallerRejectsLocalDirEscapingTheSourceRoot(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), "plugins")
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "escape", Local: localPath, Dir: "../../escape"})
+	if err == nil {
+		t.Fatalf("escaping dir was accepted, installed = %+v", installed)
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("error = %v, want an escape report", err)
+	}
+}
+
+func TestInstallerRejectsGitDirEscapingTheCloneRoot(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, repository, "plugin.zsh", "echo test\n")
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "escape", Git: "file://" + repository, Dir: "../../escape"})
+	if err == nil {
+		t.Fatalf("escaping dir was accepted, installed = %+v", installed)
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("error = %v, want an escape report", err)
+	}
 }
 
 func TestGitURLProtocolPrefixes(t *testing.T) {

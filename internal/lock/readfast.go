@@ -527,9 +527,10 @@ func (p *fastLockParser) writeUnicodeEscape(builder *strings.Builder, digits int
 			return false
 		}
 	}
-	// The digits are known to be hex here, so the only error left is a value above the max rune.
+	// The digits are known to be hex here, so the only errors left are a value above the max rune
+	// or a lone surrogate, either of which makes the fast reader bail so the general decoder takes over.
 	value, err := strconv.ParseUint(string(code), 16, 32)
-	if err != nil || (value >= 0xD800 && value <= 0xDFFF) {
+	if err != nil || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF) {
 		return false
 	}
 	builder.WriteRune(rune(value))

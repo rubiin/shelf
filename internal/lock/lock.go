@@ -424,18 +424,20 @@ func selectedFilesExist(locked LockedConfig) bool {
 	if total == 0 {
 		return true
 	}
-	files := make([]string, 0, total)
-	for _, plugin := range locked.Plugins {
-		files = append(files, plugin.Files...)
-	}
 	// A few stats are quicker inline; a shell with many plugins is quicker in parallel.
 	if total < verifyParallelAt {
-		for _, file := range files {
-			if !exists(file) {
-				return false
+		for _, plugin := range locked.Plugins {
+			for _, file := range plugin.Files {
+				if !exists(file) {
+					return false
+				}
 			}
 		}
 		return true
+	}
+	files := make([]string, 0, total)
+	for _, plugin := range locked.Plugins {
+		files = append(files, plugin.Files...)
 	}
 	missing := RunConcurrently(total, verifyConcurrency, func(_ context.Context, index int) error {
 		if exists(files[index]) {

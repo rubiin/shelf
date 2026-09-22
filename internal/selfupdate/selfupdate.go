@@ -3,6 +3,7 @@ package selfupdate
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -75,7 +76,9 @@ func archiveName(goos, goarch string) (string, error) {
 	default:
 		return "", fmt.Errorf("self-update has no release archive for %s/%s", goos, goarch)
 	}
-	return "shelf_" + goos + "_" + arch + ".tar.gz", nil
+	// GoReleaser's template titles the OS ({{ title .Os }}); goos is "linux"/"darwin", so a
+	// first-letter capitalization is exact and avoids strings.Title, which is deprecated.
+	return "shelf_" + strings.ToUpper(goos[:1]) + goos[1:] + "_" + arch + ".tar.gz", nil
 }
 
 // Update fetches the latest release and, when it differs from the current version,
@@ -220,7 +223,7 @@ func verifyChecksum(ctx context.Context, url, name string, contents []byte) erro
 
 // extractBinary unpacks the shelf binary from a tar.gz archive.
 func extractBinary(archive []byte) ([]byte, error) {
-	gzipReader, err := gzip.NewReader(strings.NewReader(string(archive)))
+	gzipReader, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return nil, fmt.Errorf("open the release archive: %w", err)
 	}

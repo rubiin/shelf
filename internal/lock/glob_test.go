@@ -133,6 +133,44 @@ func TestSelectFilesMatchesPatternsWithLeadingDotSlash(t *testing.T) {
 	}
 }
 
+func TestCollectFilesSkipsGitMetadata(t *testing.T) {
+	// A plugin's .git directory is walked for nothing: no source pattern can match it.
+	directory := t.TempDir()
+	for _, name := range []string{
+		"demo.zsh",
+		".git/hooks/pre-commit.sh",
+		".git/objects/pack/pack-abc123.idx",
+		".git/refs/heads/main",
+		".git/demo.zsh",
+	} {
+		path := filepath.Join(directory, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, err := collectFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != "demo.zsh" {
+		t.Fatalf("files = %v, want only [demo.zsh]", files)
+	}
+
+	// And through selection, where a .git file must never be picked up by a pattern.
+	got, err := selectFiles(directory, "demo", "zsh", []string{"*.zsh", "*.sh"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(directory, "demo.zsh")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("selected %v, want [%s]", got, want)
+	}
+}
+
 func TestCollectFilesReportsUnreadableDirectory(t *testing.T) {
 	if files, err := collectFiles(filepath.Join(t.TempDir(), "absent")); err != nil || files != nil {
 		t.Fatalf("missing directory = %v, err = %v, want no files and no error", files, err)

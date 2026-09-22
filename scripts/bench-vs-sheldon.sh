@@ -13,7 +13,7 @@ Options:
   --plugins N    number of plugins in the generated config (default: 20)
   --runs N       hyperfine runs per command (default: 100)
   --warmup N     hyperfine warmup runs per command (default: 10)
-  --shelf PATH   shelf binary to benchmark (default: build ./cmd/shelf)
+  --shelf PATH   build ./cmd/shelf fresh to PATH (default: a temp dir)
   --export PATH  write hyperfine's markdown report to PATH
   -h, --help     print this help
 EOF
@@ -99,10 +99,12 @@ config="$work/plugins.toml"
 cp "$config" "$XDG_CONFIG_HOME/sheldon/plugins.toml"
 cp "$config" "$XDG_CONFIG_HOME/shelf/plugins.toml"
 
+# Always benchmark the freshly built binary so the comparison never uses a
+# stale build; --shelf only picks where that build is written.
 if [ -z "$shelf_binary" ]; then
     shelf_binary="$work/shelf"
-    (cd "$root" && go build -trimpath -buildvcs=false -ldflags "-s -w" -o "$shelf_binary" ./cmd/shelf)
 fi
+(cd "$root" && go build -trimpath -buildvcs=false -ldflags "-s -w" -o "$shelf_binary" ./cmd/shelf)
 
 # Lock both tools up front, so the measured commands take the hot path.
 sheldon lock > /dev/null 2>&1

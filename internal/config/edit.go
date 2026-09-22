@@ -90,9 +90,18 @@ func Remove(path, name string) error {
 	removed := false
 	inside := false
 	root := true
+	depth := 0 // open bracket count while dropping a multi-line dotted-key value
 	lines := strings.Split(string(contents), "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
+		if depth > 0 {
+			depth += countBrackets(line)
+			if depth <= 0 {
+				depth = 0
+			}
+			removed = true
+			continue
+		}
 		header := normalizeTableHeader(line)
 		switch {
 		case header != "":
@@ -105,6 +114,7 @@ func Remove(path, name string) error {
 			}
 		case root && !inside && isDottedPluginKey(line, name):
 			removed = true
+			depth = countBrackets(line)
 			continue
 		}
 		if inside {
@@ -115,7 +125,48 @@ func Remove(path, name string) error {
 	if !removed {
 		return fmt.Errorf("plugin %q not found", name)
 	}
-	return writeAtomically(path, []byte(strings.Join(kept, "\n")))
+	result := []byte(strings.Join(kept, "\n"))
+	if _, err := decode(result); err != nil {
+		return fmt.Errorf("remove plugin %q: resulting config is invalid: %w", name, err)
+	}
+	return writeAtomically(path, result)
+}
+
+// countBrackets returns how many more [ than ] a line has, ignoring brackets inside quoted strings and comments, so an inline array's value never looks multi-line.
+func countBrackets(line string) int {
+	inString := byte(0) // '"' inside a basic string, '\'' inside a literal string
+	escaped := false
+	var opens, closes int
+	for index := 0; index < len(line); index++ {
+		character := line[index]
+		switch {
+		case inString == '"':
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == '"' {
+				inString = 0
+			}
+		case inString == '\'':
+			if character == '\'' {
+				inString = 0
+			}
+		case character == '#':
+			return opens - closes
+		case character == '"' || character == '\'':
+			inString = character
+		case character == '[':
+			opens++
+		case character == ']':
+			closes++
+		}
+	}
+	return opens - closes
 }
 
 // normalizeTableHeader returns a table header without spaces or quotes, or "" for other lines.

@@ -204,6 +204,32 @@ func TestFastReadFallsBackToToml(t *testing.T) {
 	}
 }
 
+// \U escapes need the same treatment the encoder gives any lock: an escape that means nothing to
+// the general decoder must make the fast reader bail rather than silently corrupt the field.
+func TestFastReadFallsBackOnOutOfRangeUnicodeEscape(t *testing.T) {
+	// 0x11000000 is above the Unicode ceiling (0x10FFFF), so TOML rejects it.
+	contents := []byte("config_fingerprint = \"abc\"\nshell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\nfiles = [\"\\U11000000.zsh\"]\n")
+	if _, ok := parseLockFast(contents); ok {
+		t.Fatalf("fast reader accepted a \\U escape above 0x10FFFF:\n%s", contents)
+	}
+	if _, err := readLock(contents); err == nil {
+		t.Fatal("readLock accepted an out-of-range \\U escape instead of erroring")
+	}
+}
+
+func TestFastReadMatchesTomlForMaxRuneUnicodeEscape(t *testing.T) {
+	// 0x10FFFF is the largest valid code point; the fast reader must keep it, and agree with TOML.
+	contents := []byte("config_fingerprint = \"abc\"\nshell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\nfiles = [\"\\U0010FFFF.zsh\"]\n")
+	fast, ok := parseLockFast(contents)
+	if !ok {
+		t.Fatalf("fast reader gave up on a valid \\U escape:\n%s", contents)
+	}
+	slow := decodeSlow(t, contents)
+	if !reflect.DeepEqual(fast, slow) {
+		t.Fatalf("fast reader diverged:\nfast: %#v\nslow: %#v", fast, slow)
+	}
+}
+
 // Nothing the fast reader accepts may decode differently (or not at all) as TOML.
 func FuzzReadLockMatchesTomlDecoder(f *testing.F) {
 	seed := LockedConfig{

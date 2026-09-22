@@ -921,15 +921,22 @@ type compiledTemplate struct {
 	err   error
 }
 
-var templateCache sync.Map
+var (
+	templateCacheMu sync.RWMutex
+	templateCache   = map[string]compiledTemplate{}
+)
 
 // compileTemplate parses a template once, since one config re-renders the same text repeatedly.
 func compileTemplate(text string) ([]node, error) {
-	if cached, ok := templateCache.Load(text); ok {
-		entry := cached.(compiledTemplate)
+	templateCacheMu.RLock()
+	entry, ok := templateCache[text]
+	templateCacheMu.RUnlock()
+	if ok {
 		return entry.nodes, entry.err
 	}
 	nodes, err := parseTemplate(text)
-	templateCache.Store(text, compiledTemplate{nodes: nodes, err: err})
+	templateCacheMu.Lock()
+	templateCache[text] = compiledTemplate{nodes: nodes, err: err}
+	templateCacheMu.Unlock()
 	return nodes, err
 }

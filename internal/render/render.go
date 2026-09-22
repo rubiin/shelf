@@ -59,6 +59,8 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 	var current scope
 	for _, plugin := range locked.Plugins {
 		var pluginOutput scriptBuffer
+		// A plugin chunk is rarely empty, so start its buffer with room to grow.
+		pluginOutput.Grow(128)
 		// An inline plugin's own text is the template, rendered with just its name and hooks.
 		if plugin.Inline != "" {
 			if err := renderInline(plugin, shell, &pluginOutput); err != nil {

@@ -3,6 +3,7 @@ package lock
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -565,5 +566,41 @@ func TestBuildOutputStreamsToDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(diagnostics.String(), "built-here") {
 		t.Fatalf("diagnostics = %q, want the build output", diagnostics.String())
+	}
+}
+
+// TestSelectedFilesExistCoversBothPaths exercises the inline (sequential) and the
+// parallel verification paths, which is what selectedFilesExist'ing a large shell hits.
+func TestSelectedFilesExistCoversBothPaths(t *testing.T) {
+	pluginFiles := func(count int, missingAt int) LockedConfig {
+		files := make([]string, count)
+		for index := range count {
+			path := filepath.Join(t.TempDir(), fmt.Sprintf("%d.plugin.zsh", index))
+			if index != missingAt {
+				if err := os.WriteFile(path, []byte("echo hi\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files[index] = path
+		}
+		return LockedConfig{Plugins: []LockedPlugin{{Name: "demo", Files: files}}}
+	}
+
+	tests := []struct {
+		name      string
+		locked    LockedConfig
+		wantValid bool
+	}{
+		{name: "few files, all present", locked: pluginFiles(3, -1), wantValid: true},
+		{name: "few files, one missing", locked: pluginFiles(3, 1), wantValid: false},
+		{name: "many files, all present", locked: pluginFiles(verifyParallelAt+1, -1), wantValid: true},
+		{name: "many files, one missing", locked: pluginFiles(verifyParallelAt+1, verifyParallelAt), wantValid: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := selectedFilesExist(test.locked); got != test.wantValid {
+				t.Fatalf("selectedFilesExist = %v, want %v", got, test.wantValid)
+			}
+		})
 	}
 }

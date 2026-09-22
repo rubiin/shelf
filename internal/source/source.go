@@ -168,9 +168,15 @@ func RemoteDirectory(dataDir, rawURL string) (string, string, error) {
 
 func ensureDir(path string) error { return os.MkdirAll(path, 0o755) }
 
-func sourceDirectory(root, directory string) string {
+// sourceDirectory resolves a plugin's dir narrowing below its source root, rejecting any path that escapes it.
+func sourceDirectory(root, directory string) (string, error) {
 	if directory == "" || directory == "." {
-		return filepath.Clean(root)
+		return filepath.Clean(root), nil
 	}
-	return filepath.Join(root, filepath.Clean(directory))
+	joined := filepath.Join(root, filepath.Clean(directory))
+	relative, err := filepath.Rel(root, joined)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("dir %q escapes the plugin source directory", directory)
+	}
+	return joined, nil
 }
