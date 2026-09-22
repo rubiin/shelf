@@ -78,6 +78,10 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 				if !exists {
 					return "", fmt.Errorf("unknown template: %s", name)
 				}
+				// An empty template (zsh's zcompile is empty under bash) contributes nothing.
+				if text == "" {
+					continue
+				}
 				if err := renderChunk(name, text, &current, &pluginOutput); err != nil {
 					return "", err
 				}

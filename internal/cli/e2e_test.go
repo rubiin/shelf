@@ -38,6 +38,55 @@ func TestInlineLockAndSource(t *testing.T) {
 	}
 }
 
+func TestSourceRendersZcompileGuardForZshOnly(t *testing.T) {
+	directory := t.TempDir()
+	pluginDirectory := filepath.Join(directory, "plugin")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zshFile := filepath.Join(pluginDirectory, "demo.plugin.zsh")
+	if err := os.WriteFile(zshFile, []byte("echo compiled-e2e\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bashFile := filepath.Join(pluginDirectory, "demo.plugin.bash")
+	if err := os.WriteFile(bashFile, []byte("echo bash-e2e\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		shell       string
+		use         string
+		mustContain string
+		mustAbsent  string
+	}{
+		{name: "zsh compiles before sourcing", shell: "zsh", use: "demo.plugin.zsh", mustContain: `]] && zcompile "` + zshFile, mustAbsent: ""},
+		{name: "bash no-op", shell: "bash", use: "demo.plugin.bash", mustContain: `source "` + bashFile, mustAbsent: "zcompile"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configFile := filepath.Join(directory, "config-"+test.shell+".toml")
+			config := fmt.Sprintf("shell = %q\n\n[plugins.demo]\nlocal = %q\napply = [\"zcompile\", \"source\"]\nuse = [%q]\n", test.shell, pluginDirectory, test.use)
+			if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("SHELF_CONFIG_FILE", configFile)
+			t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data-"+test.shell))
+			if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := Execute([]string{"source"}, &output, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), test.mustContain) {
+				t.Fatalf("source output missing %q:\n%s", test.mustContain, output.String())
+			}
+			if test.mustAbsent != "" && strings.Contains(output.String(), test.mustAbsent) {
+				t.Fatalf("source output contains %q:\n%s", test.mustAbsent, output.String())
+			}
+		})
+	}
+}
+
 func TestSourceLeavesNoStrayLockFile(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

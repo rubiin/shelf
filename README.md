@@ -326,6 +326,25 @@ unless it is written optionally, as in `{{ hooks?.pre }}`.
 defer = "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 ```
 
+Shelf ships a built-in `zcompile` apply template for zsh (an empty no-op in
+bash): for every file a plugin sources it emits a guarded `zcompile` line that
+compiles the file on first load and recompiles it whenever the source is newer
+than its compiled form. zsh's `source` automatically loads a `.zwc` that is
+newer than the original file, so the guard keeps the compiled form fresh with
+no lock-time bookkeeping:
+
+```toml
+[plugins.demo]
+github = "user/repo"
+apply = ["zcompile", "source"]
+```
+
+zsh's `-ot` test is false when the `.zwc` does not exist yet, so the guard
+checks `! -e` first to bootstrap the first compile. `zcompile` is empty under
+bash, so the same config writes plain `source` lines there. Templates and
+`apply` lists are recorded in the lock: run `shelf lock` after enabling
+`zcompile` so a stale lock picks it up.
+
 Bare `{name}`, `{dir}`, `{file}`, and `{nl}` placeholders remain available as a
 shelf extension for templates without `{{ }}` or `{% %}` blocks.
 

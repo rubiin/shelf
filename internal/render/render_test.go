@@ -105,6 +105,10 @@ func TestBuiltinTemplates(t *testing.T) {
 			t.Errorf("bash must not define %s", name)
 		}
 	}
+	// zcompile is defined for bash as an empty no-op, so one apply list renders in both shells.
+	if bash["zcompile"] != "" {
+		t.Errorf("bash zcompile = %q, want an empty no-op", bash["zcompile"])
+	}
 	zsh := BuiltinTemplates("zsh")
 	for name, want := range map[string]string{
 		"PATH":  "export PATH=\"{{ dir }}:$PATH\"",
@@ -115,6 +119,9 @@ func TestBuiltinTemplates(t *testing.T) {
 			t.Errorf("zsh %s = %q, want %q", name, zsh[name], want)
 		}
 	}
+	if zsh["zcompile"] != zcompileTemplate {
+		t.Errorf("zsh zcompile = %q, want the guard template", zsh["zcompile"])
+	}
 
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{Name: "demo", Directory: "/tmp/demo", Apply: []string{"path"}}}}, "zsh")
 	if err != nil {
@@ -122,6 +129,98 @@ func TestBuiltinTemplates(t *testing.T) {
 	}
 	if script != "eval 'path=( \"/tmp/demo\" $path )\n'\n" {
 		t.Fatalf("path script = %q", script)
+	}
+}
+
+// TestScriptRendersZcompileGuardBeforeEachSourcedFile checks that a plugin applying zcompile
+// then source puts one guarded compile line ahead of each source line, inside one eval chunk.
+func TestScriptRendersZcompileGuardBeforeEachSourcedFile(t *testing.T) {
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh", "/tmp/two.zsh"},
+		Apply: []string{"zcompile", "source"},
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "eval '[[ ! -e \"/tmp/one.zsh.zwc\" || \"/tmp/one.zsh.zwc\" -ot \"/tmp/one.zsh\" ]] && zcompile \"/tmp/one.zsh\"\n" +
+		"[[ ! -e \"/tmp/two.zsh.zwc\" || \"/tmp/two.zsh.zwc\" -ot \"/tmp/two.zsh\" ]] && zcompile \"/tmp/two.zsh\"\n" +
+		"source \"/tmp/one.zsh\"\nsource \"/tmp/two.zsh\"\n'\n"
+	if script != want {
+		t.Fatalf("script = %q, want %q", script, want)
+	}
+}
+
+// TestScriptTreatsZcompileAsNoOpInBash checks that the same apply list under bash renders each
+// file as a plain source line with no compile text and no stray blank line from the empty template.
+func TestScriptTreatsZcompileAsNoOpInBash(t *testing.T) {
+	locked := lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh"},
+		Apply: []string{"zcompile", "source"},
+	}}}
+	compiled, err := Script(locked, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh"},
+		Apply: []string{"source"},
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled != plain {
+		t.Fatalf("bash zcompile output = %q, want the plain source output %q", compiled, plain)
+	}
+	want := "eval 'source \"/tmp/one.zsh\"\n'\n"
+	if compiled != want {
+		t.Fatalf("bash output = %q, want %q", compiled, want)
+	}
+}
+
+// TestScriptZcompileGuardCompilesAndSkipsFresh runs the rendered script in a real zsh, checking
+// the first load bootstraps a .zwc and a second load leaves it untouched (self-maintaining on mtime).
+func TestScriptZcompileGuardCompilesAndSkipsFresh(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "demo.plugin.zsh")
+	if err := os.WriteFile(file, []byte("print -r -- compiled\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{file},
+		Apply: []string{"zcompile", "source"},
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evalScript := func(script string) string {
+		t.Helper()
+		output, err := exec.Command("zsh", "-fc", `eval "$1"`, "shelf-test", script).CombinedOutput()
+		if err != nil {
+			t.Fatalf("zsh eval failed: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+	if output := evalScript(script); output != "compiled\n" {
+		t.Fatalf("first zsh output = %q, want %q", output, "compiled\n")
+	}
+	zwc := file + ".zwc"
+	first, err := os.Stat(zwc)
+	if err != nil {
+		t.Fatalf("first load did not zcompile a .zwc: %v", err)
+	}
+	if output := evalScript(script); output != "compiled\n" {
+		t.Fatalf("second zsh output = %q, want %q", output, "compiled\n")
+	}
+	second, err := os.Stat(zwc)
+	if err != nil {
+		t.Fatalf(".zwc disappeared after the second load: %v", err)
+	}
+	if !second.ModTime().Equal(first.ModTime()) {
+		t.Fatalf("fresh .zwc was recompiled: mtime changed from %v to %v", first.ModTime(), second.ModTime())
 	}
 }
 
