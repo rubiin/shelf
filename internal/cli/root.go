@@ -867,7 +867,7 @@ func pluginStatus(paths Paths, output io.Writer) error {
 		if state != "ok" {
 			unhealthy = true
 		}
-		display := state
+		var display string
 		if state == "ok" {
 			display = outColors.success(state)
 		} else {
