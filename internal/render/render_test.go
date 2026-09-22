@@ -105,9 +105,10 @@ func TestBuiltinTemplates(t *testing.T) {
 			t.Errorf("bash must not define %s", name)
 		}
 	}
-	// zcompile is defined for bash as an empty no-op, so one apply list renders in both shells.
-	if bash["zcompile"] != "" {
-		t.Errorf("bash zcompile = %q, want an empty no-op", bash["zcompile"])
+	// zcompile degrades to the plain source template under bash, so one apply list loads files
+	// in both shells (bash just never compiles anything).
+	if bash["zcompile"] != bash["source"] {
+		t.Errorf("bash zcompile = %q, want it to match the source template %q", bash["zcompile"], bash["source"])
 	}
 	zsh := BuiltinTemplates("zsh")
 	for name, want := range map[string]string{
@@ -132,34 +133,38 @@ func TestBuiltinTemplates(t *testing.T) {
 	}
 }
 
-// TestScriptRendersZcompileGuardBeforeEachSourcedFile checks that a plugin applying zcompile
-// then source puts one guarded compile line ahead of each source line, inside one eval chunk.
+// TestScriptRendersZcompileGuardBeforeEachSourcedFile checks that the built-in zcompile template
+// is self-sufficient like the defer template: one guarded compile line ahead of each source line,
+// with the plugin hooks rendered around the loop, inside one eval chunk.
 func TestScriptRendersZcompileGuardBeforeEachSourcedFile(t *testing.T) {
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:  "demo",
 		Files: []string{"/tmp/one.zsh", "/tmp/two.zsh"},
-		Apply: []string{"zcompile", "source"},
+		Hooks: map[string]string{"pre": "echo pre\n", "post": "echo post"},
+		Apply: []string{"zcompile"},
 	}}}, "zsh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "eval '[[ ! -e \"/tmp/one.zsh.zwc\" || \"/tmp/one.zsh.zwc\" -ot \"/tmp/one.zsh\" ]] && zcompile \"/tmp/one.zsh\"\n" +
+	want := "eval 'echo pre\n" +
+		"[[ ! -e \"/tmp/one.zsh.zwc\" || \"/tmp/one.zsh.zwc\" -ot \"/tmp/one.zsh\" ]] && zcompile \"/tmp/one.zsh\"\n" +
+		"source \"/tmp/one.zsh\"\n" +
 		"[[ ! -e \"/tmp/two.zsh.zwc\" || \"/tmp/two.zsh.zwc\" -ot \"/tmp/two.zsh\" ]] && zcompile \"/tmp/two.zsh\"\n" +
-		"source \"/tmp/one.zsh\"\nsource \"/tmp/two.zsh\"\n'\n"
+		"source \"/tmp/two.zsh\"\n" +
+		"echo post\n'\n"
 	if script != want {
 		t.Fatalf("script = %q, want %q", script, want)
 	}
 }
 
-// TestScriptTreatsZcompileAsNoOpInBash checks that the same apply list under bash renders each
-// file as a plain source line with no compile text and no stray blank line from the empty template.
+// TestScriptTreatsZcompileAsNoOpInBash checks that under bash the same apply list renders each
+// file as a plain source line with no compile text, byte-identical to applying the source template.
 func TestScriptTreatsZcompileAsNoOpInBash(t *testing.T) {
-	locked := lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+	compiled, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:  "demo",
 		Files: []string{"/tmp/one.zsh"},
-		Apply: []string{"zcompile", "source"},
-	}}}
-	compiled, err := Script(locked, "bash")
+		Apply: []string{"zcompile"},
+	}}}, "bash")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +196,7 @@ func TestScriptZcompileGuardCompilesAndSkipsFresh(t *testing.T) {
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:  "demo",
 		Files: []string{file},
-		Apply: []string{"zcompile", "source"},
+		Apply: []string{"zcompile"},
 	}}}, "zsh")
 	if err != nil {
 		t.Fatal(err)

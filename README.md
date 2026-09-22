@@ -321,17 +321,24 @@ unless it is written optionally, as in `{{ hooks?.pre }}`.
 defer = "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 ```
 
-Shelf ships a zsh `zcompile` apply template (an empty no-op in bash): it emits a
-guarded `zcompile` line per sourced file, compiling on first load and
-recompiling whenever the source is newer than its compiled `.zwc`. Templates
-and `apply` lists are recorded in the lock, so run `shelf lock` after enabling
-`zcompile` so a stale lock picks it up:
+Shelf ships a built-in `zcompile` apply template that combines the compile
+guard and the `source` lines in one template, like the `defer` example above:
+for every file a plugin loads it emits a guarded `zcompile` line — compiling on
+first load and recompiling whenever the source is newer than its compiled
+`.zwc` — then sources the file, which zsh auto-loads from the fresh bytecode:
 
 ```toml
 [plugins.demo]
 github = "user/repo"
-apply = ["zcompile", "source"]
+apply = ["zcompile"]
 ```
+
+zsh's `-ot` test is false when the `.zwc` does not exist yet, so the guard
+checks `! -e` first to bootstrap the first compile. Bash has no `zcompile`
+builtin, so there the template degrades to plain `source` lines: plugins load
+normally, nothing is compiled, and one config works in both shells. Templates
+and `apply` lists are recorded in the lock: run `shelf lock` after enabling
+`zcompile` so a stale lock picks it up.
 
 Bare `{name}`, `{dir}`, `{file}`, and `{nl}` placeholders remain available as a
 shelf extension for templates without `{{ }}` or `{% %}` blocks.
