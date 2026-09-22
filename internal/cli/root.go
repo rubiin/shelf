@@ -299,18 +299,6 @@ func NewRoot() *cobra.Command {
 	}
 	removeCommand.Flags().BoolVarP(&removeInteractive, "interactive", "i", false, "select plugins to remove interactively")
 	command.AddCommand(removeCommand)
-	command.AddCommand(&cobra.Command{Use: "completions SHELL", Short: "Generate shell completion scripts", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		switch args[0] {
-		case "bash":
-			return command.GenBashCompletion(cmd.OutOrStdout())
-		case "zsh":
-			return command.GenZshCompletion(cmd.OutOrStdout())
-		case "fish":
-			return command.GenFishCompletion(cmd.OutOrStdout(), true)
-		default:
-			return fmt.Errorf("unsupported completion shell: %s", args[0])
-		}
-	}})
 	var initShell string
 	initCommand := &cobra.Command{
 		Use:   "init",

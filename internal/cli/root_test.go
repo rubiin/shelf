@@ -22,6 +22,9 @@ func TestRootCommands(t *testing.T) {
 	t.Setenv("SHELF_CONFIG_FILE", configFile)
 	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
 	root := NewRoot()
+	// The default `completion` command is registered by Cobra when executing,
+	// so initialize it before inspecting the command surface.
+	root.InitDefaultCompletionCmd()
 	if root.Use != "shelf" {
 		t.Fatalf("root use = %q", root.Use)
 	}
@@ -29,7 +32,7 @@ func TestRootCommands(t *testing.T) {
 	for _, command := range root.Commands() {
 		commands[command.Name()] = true
 	}
-	for _, name := range []string{"init", "lock", "source", "update", "path", "status", "doctor", "clean", "list", "add", "edit", "remove", "completions", "self-update"} {
+	for _, name := range []string{"init", "lock", "source", "update", "path", "status", "doctor", "clean", "list", "add", "edit", "remove", "completion", "self-update"} {
 		if !commands[name] {
 			t.Errorf("root command %q is missing", name)
 		}
