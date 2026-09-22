@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Shelf</h1>
 <p align="center">
-  <em>Fast, configurable shell plugin manager for both bash and zsh.</em>
+  <em>Fast, configurable shell plugin manager for both bash and zsh heavily inspired from sheldon, zinit and zplug.</em>
 </p>
 
 <p align="center">
