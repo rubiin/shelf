@@ -894,6 +894,145 @@ func TestListPrintsLockedPluginNames(t *testing.T) {
 	}
 }
 
+func TestInfoReportsLockedGitPlugin(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	revision := gitCommit(t, repository, "plugin.zsh", "echo info\n")
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.test]\ngit = \"" + repository + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := source.GitDirectory(filepath.Join(directory, "data"), source.Request{Git: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"info", "test"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := "- source: \"git:" + repository + "\"\n" +
+		"- rev: \"" + revision + "\"\n" +
+		"- files: \"" + filepath.Join(checkout, "plugin.zsh") + "\"\n"
+	if !strings.HasPrefix(output.String(), wantPrefix) {
+		t.Fatalf("info output = %q, want prefix %q", output.String(), wantPrefix)
+	}
+	if !strings.Contains(output.String(), "- size: \"") {
+		t.Fatalf("info output = %q, want an installed size line", output.String())
+	}
+}
+
+func TestInfoReportsLocalPluginSourceAndSize(t *testing.T) {
+	directory := t.TempDir()
+	pluginDir := filepath.Join(directory, "plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginFile := filepath.Join(pluginDir, "demo.zsh")
+	if err := os.WriteFile(pluginFile, []byte("echo local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"" + pluginDir + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"info", "demo"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := "- source: \"" + pluginDir + "\"\n" +
+		"- files: \"" + pluginFile + "\"\n"
+	if !strings.HasPrefix(output.String(), wantPrefix) {
+		t.Fatalf("info output = %q, want prefix %q", output.String(), wantPrefix)
+	}
+	if !strings.Contains(output.String(), "- size: \"") {
+		t.Fatalf("info output = %q, want an installed size line", output.String())
+	}
+}
+
+func TestInfoShowsInlinePluginWithoutSize(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"info", "test"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "- source: \"inline\"\n" {
+		t.Fatalf("info output = %q, want only the inline source", output.String())
+	}
+}
+
+func TestInfoRejectsUnknownPlugin(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output, stderr bytes.Buffer
+	if err := Execute([]string{"info", "missing"}, &output, &stderr); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("err = %v, want an error naming the missing plugin", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("info stdout = %q, want empty for an unknown plugin", output.String())
+	}
+	if !strings.Contains(stderr.String(), "missing") {
+		t.Fatalf("info stderr = %q, want the missing plugin name", stderr.String())
+	}
+}
+
 func TestStatusReportsHealthyLockedPlugins(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

@@ -166,6 +166,7 @@ shelf status
 shelf doctor
 shelf clean
 shelf list
+shelf info NAME
 shelf add NAME ...
 shelf edit
 shelf remove NAME
@@ -176,6 +177,9 @@ shelf --version
 
 `lock` and `source` install plugins concurrently by default, with up to eight
 installs in flight. Use `--concurrency N` to set a different positive limit.
+
+`shelf info NAME` prints a locked plugin's source, revision, and selected files
+from the lock file, plus the size of its installed directory.
 
 Global options:
 

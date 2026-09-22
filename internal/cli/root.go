@@ -218,6 +218,16 @@ func NewRoot() *cobra.Command {
 			})
 		},
 	})
+	command.AddCommand(&cobra.Command{
+		Use:   "info NAME",
+		Short: "Show a locked plugin's source, revision, files, and size",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withConfigLock(accessRead, func(paths Paths) error {
+				return pluginInfo(paths, args[0], cmd.OutOrStdout())
+			})
+		},
+	})
 	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addDir, addFile string
@@ -779,6 +789,92 @@ func listPlugins(paths Paths, output io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// pluginInfo reports a locked plugin's source, revision, selected files, and installed size from the lock file.
+func pluginInfo(paths Paths, name string, output io.Writer) error {
+	locked, err := lock.Read(paths.LockFile(profile))
+	if err != nil {
+		return err
+	}
+	var plugin lock.LockedPlugin
+	found := false
+	for _, candidate := range locked.Plugins {
+		if candidate.Name == name {
+			plugin, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("plugin %q is not in the lock file", name)
+	}
+	// Local and remote plugins record no source; their installed directory names the source instead.
+	source := plugin.Source
+	switch {
+	case plugin.Inline != "":
+		source = "inline"
+	case source == "":
+		source = plugin.Directory
+	}
+	var lines [][2]string
+	if source != "" {
+		lines = append(lines, [2]string{"source", source})
+	}
+	if plugin.Rev != "" {
+		lines = append(lines, [2]string{"rev", plugin.Rev})
+	}
+	for _, file := range plugin.Files {
+		lines = append(lines, [2]string{"files", file})
+	}
+	// Inline plugins have nothing installed, so they have no size.
+	if plugin.Directory != "" {
+		total, err := directorySize(plugin.Directory)
+		if err != nil {
+			return fmt.Errorf("measure plugin %q size: %w", name, err)
+		}
+		lines = append(lines, [2]string{"size", humanSize(total)})
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintf(output, "- %s: %q\n", line[0], line[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// directorySize sums the bytes of every file under a directory.
+func directorySize(directory string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(directory, func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
+}
+
+// humanSize formats a byte count the way du does: 512B, 24K, 1.2M.
+func humanSize(total int64) string {
+	units := []string{"B", "K", "M", "G", "T"}
+	value := float64(total)
+	index := 0
+	for value >= 1024 && index < len(units)-1 {
+		value /= 1024
+		index++
+	}
+	if index == 0 {
+		return fmt.Sprintf("%.0f%s", value, units[index])
+	}
+	return fmt.Sprintf("%.1f%s", value, units[index])
 }
 
 func printPaths(paths Paths, output io.Writer) error {
