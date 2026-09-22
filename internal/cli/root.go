@@ -216,7 +216,7 @@ func NewRoot() *cobra.Command {
 	})
 	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
-	var addRev, addBranch, addTag, addProto, addProtocol, addDir, addFile string
+	var addRev, addBranch, addTag, addProto, addDir, addFile string
 	var addUse, addApply, addBuild, addProfiles, addCloneOpts []string
 	var addHooks map[string]string
 	var addDepth int
@@ -230,7 +230,7 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: firstNonEmpty(addProto, addProtocol), Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
+				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
 			})
 		},
 	}
@@ -248,8 +248,6 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringVar(&addBranch, "branch", "", "Git branch")
 	addCommand.Flags().StringVar(&addTag, "tag", "", "Git tag")
 	addCommand.Flags().StringVar(&addProto, "proto", "", "Git protocol for forge sources: https, git, or ssh")
-	addCommand.Flags().StringVar(&addProtocol, "protocol", "", "deprecated alias of --proto")
-	_ = addCommand.Flags().MarkHidden("protocol")
 	addCommand.Flags().StringVar(&addDir, "dir", "", "plugin subdirectory")
 	addCommand.Flags().StringVar(&addFile, "file", "", "plugin file")
 	addCommand.Flags().StringSliceVar(&addUse, "use", nil, "plugin file glob")
@@ -351,16 +349,6 @@ func withConfigLock(mode access, run func(Paths) error) error {
 	}
 	defer func() { _ = guard.Release() }()
 	return run(paths)
-}
-
-// firstNonEmpty prefers the documented flag value over a deprecated alias.
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 // sourceInputs holds the config-file derivations a source run needs.

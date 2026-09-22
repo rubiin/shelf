@@ -44,13 +44,6 @@ func decode(contents []byte) (Config, error) {
 		}
 	}
 
-	for name, plugin := range cfg.Plugins {
-		if plugin.Proto == "" && plugin.Protocol != "" {
-			plugin.Proto = plugin.Protocol
-		}
-		plugin.Protocol = ""
-		cfg.Plugins[name] = plugin
-	}
 	return cfg, nil
 }
 

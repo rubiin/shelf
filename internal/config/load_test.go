@@ -58,24 +58,6 @@ func TestValidateRejectsMultipleSources(t *testing.T) {
 	}
 }
 
-func TestLoadFoldsLegacyProtocolIntoProto(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	contents := "[plugins.legacy]\ngithub = \"a/b\"\nprotocol = \"ssh\"\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Plugins["legacy"].Proto != "ssh" {
-		t.Fatalf("proto = %q, want ssh", cfg.Plugins["legacy"].Proto)
-	}
-	if err := Validate(cfg); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestValidateChecksProto(t *testing.T) {
 	tests := []struct {
 		name   string
