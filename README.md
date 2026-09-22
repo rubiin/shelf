@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Shelf</h1>
 <p align="center">
-  <em>Fast, configurable shell plugin manager written in Go.</em>
+  <em>Fast, configurable shell plugin manager for both bash and zsh.</em>
 </p>
 
 <p align="center">
