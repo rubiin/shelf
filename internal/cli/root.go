@@ -471,8 +471,9 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if profile != "" && !lock.ProfileMatches(cfg, profile) {
 		log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
 	}
-	log.header("Loaded", displayPath(paths.ConfigFile))
-	for _, name := range lock.PluginNames(cfg) {
+	plugins := lock.PluginNames(cfg)
+	log.header("Loaded", fmt.Sprintf("%d plugins %s", len(plugins), displayPath(paths.ConfigFile)))
+	for _, name := range plugins {
 		plugin := cfg.Plugins[name]
 		if lock.Active(plugin.Profiles, profile) {
 			log.status("Checked", pluginSource(plugin))
@@ -506,7 +507,7 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	log.header("Locked", displayPath(lockPath))
+	log.header("Locked", fmt.Sprintf("%d plugins %s", len(plugins), displayPath(lockPath)))
 	return nil
 }
 
