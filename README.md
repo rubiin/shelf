@@ -10,8 +10,6 @@
   <a href="https://github.com/rubiin/shelf/blob/master/LICENSE"><img alt="License" src="https://img.shields.io/github/license/rubiin/shelf" /></a>
   <a href="https://github.com/rubiin/shelf/actions"><img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/rubiin/shelf/ci.yml"></a>
   <a href="https://aur.archlinux.org/packages/shelf-sh-bin"><img alt="AUR Version" src="https://img.shields.io/aur/version/shelf-sh-bin"></a>
-
-
 </p>
 
 ## Features
@@ -62,9 +60,8 @@ just build
 install -Dm755 shelf "$HOME/.local/bin/shelf"
 ```
 
-`just build` (and every release build) passes `-trimpath`, `-buildvcs=false`,
-and `-ldflags "-s -w"`. That keeps the binary around 7 MB instead of 11 MB and
-makes builds reproducible. Without `just`, the same build is:
+`just build` passes `-trimpath -buildvcs=false -ldflags "-s -w"`, keeping the
+binary around 7 MB and making builds reproducible. Without `just`:
 
 ```sh
 go build -trimpath -buildvcs=false -ldflags "-s -w" -o shelf ./cmd/shelf
@@ -78,13 +75,12 @@ Release installs can update themselves:
 shelf self-update
 ```
 
-`self-update` compares the running version with the latest
-[release](https://github.com/rubiin/shelf/releases), downloads the matching
-archive and its `checksums.txt`, verifies the archive's sha256, and replaces
-the `shelf` binary atomically. Installations managed by a package manager (AUR,
-`.deb`, `.rpm`, `.apk`) should keep updating through the package manager
-instead. Development builds refuse to self-update; pass `--force` to update
-them anyway.
+`self-update` fetches the latest
+[release](https://github.com/rubiin/shelf/releases), verifies the downloaded
+archive against its published sha256, and replaces the `shelf` binary
+atomically. Installations managed by a package manager (AUR, `.deb`, `.rpm`,
+`.apk`) should keep updating through the package manager instead. Development
+builds refuse to self-update; pass `--force` to update them anyway.
 
 ## Getting started
 
@@ -115,13 +111,9 @@ shelf lock
 eval "$(shelf source)"
 ```
 
-Add the `eval` command to `.bashrc` or `.zshrc`. Each plugin is evaluated
-separately, so aliases and functions defined by one plugin are available to
-later plugins.
-
-After changing `plugins.toml`, run `shelf lock`. Use `shelf source` only from
-your shell startup file. It prints shell code to stdout; diagnostics stay on
-stderr.
+Add the `eval` command to `.bashrc` or `.zshrc`. Re-run `shelf lock` after
+changing `plugins.toml`; keep `shelf source` for your shell startup file. It
+prints shell code to stdout and diagnostics to stderr.
 
 ## Build and test
 
@@ -157,9 +149,8 @@ of 20 plugins (12 local, 8 inline):
 | `source`, warm lock | 14.5 ms | 7.3 ms |
 | `eval "$(… source)"` in bash | 16.9 ms | 10.2 ms |
 
-Both tools render the same script, so the difference is overhead: sheldon
-spends most of its time before it reads the config, while shelf reads, verifies,
-and renders in less than sheldon takes to start.
+Both tools render the same script, so the gap is overhead before shelf reads
+the config.
 
 ## Command-line interface
 
@@ -213,13 +204,11 @@ SHELF_EDITOR="nvim --wait"
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` still control base directories when
 explicit shelf directory flags are absent.
 
-The configuration file is `plugins.toml`. When `--config-file` is set without
-`--config-dir`, the configuration directory is that file's parent directory.
-
-`shelf edit` picks its editor in this order: `SHELF_EDITOR`, then `VISUAL`,
-then `EDITOR`. The value is split with shell-word rules, so quoted paths and
-flags with spaces are preserved. `SHELF_SHELL` accepts only `bash` or `zsh`;
-another value is an error rather than a silent fallback.
+The configuration file is `plugins.toml`. Without `--config-dir`, its
+directory is `--config-file`'s parent. `shelf edit` uses `SHELF_EDITOR`, then
+`VISUAL`, then `EDITOR`, splitting the value with shell-word rules so quoted
+paths survive. `SHELF_SHELL` accepts only `bash` or `zsh`; any other value is
+an error rather than a silent fallback.
 
 ## Configuration
 
@@ -263,10 +252,10 @@ a Git URL or local Git repository. `remote` downloads one file. `local` uses an
 existing file or directory, and `inline` stores shell code directly in TOML.
 
 Plugin options include `use`, `apply`, `profiles`, `hooks`, `build`, `dir`, `file`, `proto`,
-`cloneopts`, and `depth`. `proto` selects the protocol for forge sources (`github`,
-`gist`, `gitlab`, `bitbucket`, `codeberg`): `https`, `git`, or `ssh`. `shelf add
---proto ssh` writes the same field. `use`
-accepts recursive glob patterns relative to the installed plugin directory.
+`cloneopts`, and `depth`. `proto` picks the forge protocol (`github`, `gist`,
+`gitlab`, `bitbucket`, `codeberg`), one of `https`, `git`, or `ssh`;
+`shelf add --proto ssh` writes the same field. `use` takes recursive glob
+patterns relative to the installed plugin directory.
 
 Git plugins are cloned shallowly (`--depth 1`) by default. `depth` overrides the
 clone depth: `depth = 0` clones full history, and a positive value fetches that
@@ -331,24 +320,17 @@ unless it is written optionally, as in `{{ hooks?.pre }}`.
 defer = "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 ```
 
-Shelf ships a built-in `zcompile` apply template for zsh (an empty no-op in
-bash): for every file a plugin sources it emits a guarded `zcompile` line that
-compiles the file on first load and recompiles it whenever the source is newer
-than its compiled form. zsh's `source` automatically loads a `.zwc` that is
-newer than the original file, so the guard keeps the compiled form fresh with
-no lock-time bookkeeping:
+Shelf ships a zsh `zcompile` apply template (an empty no-op in bash): it emits a
+guarded `zcompile` line per sourced file, compiling on first load and
+recompiling whenever the source is newer than its compiled `.zwc`. Templates
+and `apply` lists are recorded in the lock, so run `shelf lock` after enabling
+`zcompile` so a stale lock picks it up:
 
 ```toml
 [plugins.demo]
 github = "user/repo"
 apply = ["zcompile", "source"]
 ```
-
-zsh's `-ot` test is false when the `.zwc` does not exist yet, so the guard
-checks `! -e` first to bootstrap the first compile. `zcompile` is empty under
-bash, so the same config writes plain `source` lines there. Templates and
-`apply` lists are recorded in the lock: run `shelf lock` after enabling
-`zcompile` so a stale lock picks it up.
 
 Bare `{name}`, `{dir}`, `{file}`, and `{nl}` placeholders remain available as a
 shelf extension for templates without `{{ }}` or `{% %}` blocks.
@@ -384,29 +366,14 @@ $XDG_CONFIG_HOME/shelf/plugins.lock
 $XDG_CONFIG_HOME/shelf/plugins.<profile>.lock
 ```
 
-This manifest contains only Git-based plugin names, sources, and
-resolved commit revisions. Commit it with `plugins.toml` to make plugin
-versions reproducible. When present, `shelf lock`, `shelf lock --reinstall`,
-and `shelf source --relock` use its matching revisions. `shelf lock --update`
-and `shelf update --lock` fetch current revisions and refresh the manifest.
-Local, remote, and inline plugins are intentionally omitted.
+It holds only Git-based plugin names and resolved revisions, so commit it with
+`plugins.toml` for reproducible versions. When present, `shelf lock`,
+`shelf lock --reinstall`, and `shelf source --relock` use its revisions;
+`shelf lock --update` and `shelf update --lock` fetch current ones and refresh
+the manifest. Local, remote, and inline plugins are intentionally omitted.
 
-Use normal locking for repeatable installs:
-
-```sh
-shelf lock                 # create or use the tracked revision manifest
-shelf lock --reinstall     # rebuild installed Git sources at pinned revisions
-shelf lock --update        # fetch current revisions and rewrite the manifest
-```
-
-The runtime lock under the data directory is not intended for version control.
-It includes local paths and selected files so `shelf source` can start without
-decoding the full configuration. Commit the revision manifest under the config
-directory instead.
-
-A selected `--profile` or `SHELF_PROFILE` that matches no configured plugin
-emits a warning. Unprofiled plugins still load, which keeps an accidental
-profile typo from disabling the rest of a configuration.
+The runtime lock under the data directory is not meant for version control —
+commit the revision manifest instead.
 
 Diagnostics go to stderr: `Loaded` and `Locked` headers, right-aligned
 `Checked` and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and
@@ -451,8 +418,3 @@ Use a temporary configuration:
 ```sh
 shelf --config-file /tmp/plugins.toml source
 ```
-
-## Status
-
-The repository contains focused tests for CLI path resolution, TOML
-configuration, source acquisition, lock handling, and shell rendering.

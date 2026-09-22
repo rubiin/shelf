@@ -111,7 +111,7 @@ sheldon lock > /dev/null 2>&1
 "$shelf_binary" lock > /dev/null 2>&1
 
 echo "sheldon: $(sheldon --version | head -1)"
-echo "shelf:   $("$shelf_binary" version), $(stat -c %s "$shelf_binary" 2> /dev/null || stat -f %z "$shelf_binary") bytes"
+echo "shelf:   $("$shelf_binary" --version), $(stat -c %s "$shelf_binary" 2> /dev/null || stat -f %z "$shelf_binary") bytes"
 echo "config:  $plugins plugins ($local_plugins local, $((plugins - local_plugins)) inline)"
 echo "output:  sheldon $(sheldon source | wc -l) lines, shelf $("$shelf_binary" source | wc -l) lines"
 if ! diff <(sheldon source) <("$shelf_binary" source) > "$work/output.diff"; then
@@ -135,7 +135,7 @@ compare() {
         -n "shelf: $label" "$shelf_command"
 }
 
-compare "startup" "sheldon version" "$shelf_binary version" none
+compare "startup" "sheldon version" "$shelf_binary --version" none
 compare "source" "sheldon source" "$shelf_binary source" none
 export SHELF_BENCH_BINARY="$shelf_binary"
 compare "eval in bash" 'eval "$(sheldon source)"' 'eval "$($SHELF_BENCH_BINARY source)"' bash
