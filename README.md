@@ -15,6 +15,7 @@
 ## Features
 
 - Git, GitHub, Gist, GitLab, Bitbucket, Codeberg, remote, local, and inline plugins.
+- Optional local plugins
 - Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
 - Per-plugin `cloneopts` and clone `depth` for Git sources, recorded in the lock.
 - Bash and Zsh output with per-plugin file globs and hooks.

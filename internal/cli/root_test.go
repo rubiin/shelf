@@ -254,7 +254,7 @@ func TestSelfUpdateReportsUpToDate(t *testing.T) {
 	if err := Execute([]string{"self-update"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != "shelf 9.9.9 is up to date\n" {
+	if stdout.String() != "✓ shelf 9.9.9 is up to date\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -273,7 +273,7 @@ func TestSelfUpdateReportsTheInstalledVersion(t *testing.T) {
 	if err := Execute([]string{"self-update", "--force"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != "updated shelf: 1.0.0 -> 2.0.0\n" {
+	if stdout.String() != "✓ updated shelf: 1.0.0 -> 2.0.0\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

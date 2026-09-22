@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,9 @@ import (
 
 // Version is the release version, which main stamps through the linker.
 var Version = "dev"
+
+// successMark prefixes successful command results on stdout with a check mark.
+const successMark = "✓"
 
 var (
 	quiet          bool
@@ -230,7 +234,11 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth})
+				if err := config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth}); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s added: %s\n", writerColors(cmd.OutOrStdout()).success(successMark), args[0])
+				return err
 			})
 		},
 	}
@@ -281,7 +289,11 @@ func NewRoot() *cobra.Command {
 				if len(args) == 0 {
 					return fmt.Errorf("accepts 1 arg(s), received 0")
 				}
-				return config.Remove(paths.ConfigFile, args[0])
+				if err := config.Remove(paths.ConfigFile, args[0]); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s removed: %s\n", writerColors(cmd.OutOrStdout()).success(successMark), args[0])
+				return err
 			})
 		},
 	}
@@ -303,16 +315,9 @@ func NewRoot() *cobra.Command {
 	initCommand := &cobra.Command{
 		Use:   "init",
 		Short: "Create a new shell plugin configuration",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				shell, err := configShell()
-				if err != nil {
-					return err
-				}
-				if initShell != "" {
-					shell = config.Shell(initShell)
-				}
-				return config.Initialize(paths.ConfigFile, shell)
+				return initConfig(cmd, paths, initShell)
 			})
 		},
 	}
@@ -343,7 +348,7 @@ func withConfigLock(mode access, run func(Paths) error) error {
 	if err != nil {
 		return err
 	}
-	guard, err := filelock.Acquire(paths.ConfigDirectory, mode == accessWrite, os.Stderr)
+	guard, err := filelock.Acquire(paths.ConfigDirectory, mode == accessWrite, styledLines(os.Stderr, ansiWarningColor))
 	if err != nil {
 		return err
 	}
@@ -404,10 +409,10 @@ func renderScript(output io.Writer, locked lock.LockedConfig, diagnostics io.Wri
 	log := newLogger(diagnostics)
 	for _, plugin := range locked.Plugins {
 		if plugin.Inline != "" {
-			log.verboseStatus("Inlined", plugin.Name)
+			log.verboseStatus("Inlined", log.dim(plugin.Name))
 			continue
 		}
-		log.verboseStatus("Rendered", plugin.Name)
+		log.verboseStatus("Rendered", log.dim(plugin.Name))
 	}
 	script, err := render.Script(locked, locked.Shell)
 	if err != nil {
@@ -463,14 +468,14 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 		log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
 	}
 	plugins := lock.PluginNames(cfg)
-	log.header("Loaded", fmt.Sprintf("%d plugins %s", len(plugins), displayPath(paths.ConfigFile)))
+	log.header("Loaded", fmt.Sprintf("%d plugins %s", len(plugins), log.dim(displayPath(paths.ConfigFile))))
 	for _, name := range plugins {
 		plugin := cfg.Plugins[name]
 		if lock.Active(plugin.Profiles, profile) {
-			log.status("Checked", pluginSource(plugin))
+			log.status("Checked", log.dim(pluginSource(plugin)))
 			continue
 		}
-		log.status("Skipped", pluginSource(plugin))
+		log.status("Skipped", log.dim(pluginSource(plugin)))
 	}
 	//  prunes installed sources that the config no longer owns before locking.
 	if err := cleanUnownedSources(paths.DataDirectory, cfg, log); err != nil {
@@ -498,7 +503,7 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	log.header("Locked", fmt.Sprintf("%d plugins %s", len(plugins), displayPath(lockPath)))
+	log.header("Locked", fmt.Sprintf("%d plugins %s", len(plugins), log.dim(displayPath(lockPath))))
 	return nil
 }
 
@@ -610,7 +615,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	lockPath := paths.LockFile(profile)
 	log := newLogger(diagnostics)
 	if !force {
-		guard, err := filelock.Acquire(paths.ConfigDirectory, false, diagnostics)
+		guard, err := filelock.Acquire(paths.ConfigDirectory, false, styledLines(diagnostics, ansiWarningColor))
 		if err != nil {
 			return err
 		}
@@ -629,7 +634,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 			return err
 		}
 	}
-	guard, err := filelock.Acquire(paths.ConfigDirectory, true, diagnostics)
+	guard, err := filelock.Acquire(paths.ConfigDirectory, true, styledLines(diagnostics, ansiWarningColor))
 	if err != nil {
 		return err
 	}
@@ -700,7 +705,7 @@ func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
 	out := cmd.OutOrStdout()
 	selection, err := interactiveSelect(names, out)
 	if errors.Is(err, tui.ErrCancelled) {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cancelled")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), writerColors(cmd.ErrOrStderr()).dim("cancelled"))
 		return nil
 	}
 	if err != nil {
@@ -710,11 +715,67 @@ func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
 		if err := config.Remove(paths.ConfigFile, name); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(out, "removed: %s\n", name)
+		_, _ = fmt.Fprintf(out, "%s removed: %s\n", writerColors(out).success(successMark), name)
 	}
 	if len(selection) > 0 {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "run 'shelf lock' to update the lock file")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), writerColors(cmd.ErrOrStderr()).dim("run 'shelf lock' to update the lock file"))
 	}
+	return nil
+}
+
+// initShellPrompt and initConfirmPrompt ask the init questions; variables so tests can script them.
+var initShellPrompt = func(in *bufio.Reader, out io.Writer) (config.Shell, error) {
+	choice, err := tui.Choose("Select shell:", []string{"bash", "zsh"}, in, out)
+	if err != nil {
+		return "", err
+	}
+	return config.Shell(choice), nil
+}
+
+var initConfirmPrompt = func(path string, in *bufio.Reader, out io.Writer) (bool, error) {
+	return tui.Confirm(fmt.Sprintf("Initialize config at %s?", path), in, out)
+}
+
+// initConfig refuses to reinitialize an existing config, otherwise asks which
+// shell to configure, confirms the target path, and only then writes the
+// config. --non-interactive and the --shell flag skip the prompts; the success
+// message is always printed last.
+func initConfig(cmd *cobra.Command, paths Paths, flagShell string) error {
+	if _, err := os.Stat(paths.ConfigFile); err == nil {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), writerColors(cmd.ErrOrStderr()).warn("config already exists at "+paths.ConfigFile))
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	shell, err := configShell()
+	if err != nil {
+		return err
+	}
+	if flagShell != "" {
+		shell = config.Shell(flagShell)
+	}
+	out := cmd.OutOrStdout()
+	if !nonInteractive {
+		in := bufio.NewReader(cmd.InOrStdin())
+		if flagShell == "" {
+			shell, err = initShellPrompt(in, out)
+			if err != nil {
+				return err
+			}
+		}
+		ok, err := initConfirmPrompt(paths.ConfigFile, in, out)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), writerColors(cmd.ErrOrStderr()).dim("aborted"))
+			return nil
+		}
+	}
+	if err := config.Initialize(paths.ConfigFile, shell); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "%s initialized %s config at %s\n", writerColors(out).success(successMark), shell, paths.ConfigFile)
 	return nil
 }
 
@@ -800,12 +861,19 @@ func pluginStatus(paths Paths, output io.Writer) error {
 		return err
 	}
 	var unhealthy bool
+	outColors := writerColors(output)
 	for index, plugin := range plugins {
 		state := states[index]
 		if state != "ok" {
 			unhealthy = true
 		}
-		if _, err := fmt.Fprintf(output, "%s: %s\n", plugin.Name, state); err != nil {
+		display := state
+		if state == "ok" {
+			display = outColors.success(state)
+		} else {
+			display = outColors.error(state)
+		}
+		if _, err := fmt.Fprintf(output, "%s: %s\n", plugin.Name, display); err != nil {
 			return err
 		}
 	}
@@ -824,7 +892,8 @@ func doctor(paths Paths, output io.Writer) error {
 		return err
 	}
 	fingerprint = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
-	if _, err := fmt.Fprintf(output, "%-8s  %s\n", "version:", "shelf "+Version); err != nil {
+	outColors := writerColors(output)
+	if _, err := fmt.Fprintf(output, "%s  %s\n", outColors.header(fmt.Sprintf("%-8s", "version:")), "shelf "+Version); err != nil {
 		return err
 	}
 	shell, err := resolveShell(cfg)
@@ -839,17 +908,17 @@ func doctor(paths Paths, output io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("could not determine %s version: %w", shell, err)
 	}
-	if _, err := fmt.Fprintf(output, "%-8s  %s\n", "shell:", displayPath(shellPath)); err != nil {
+	if _, err := fmt.Fprintf(output, "%s  %s\n", outColors.header(fmt.Sprintf("%-8s", "shell:")), displayPath(shellPath)); err != nil {
 		return err
 	}
 	// Continuation line aligned with the value column under "shell:".
-	if _, err := fmt.Fprintf(output, "%*s%s\n", 10, "", shellVersion); err != nil {
+	if _, err := fmt.Fprintf(output, "%*s%s\n", 10, "", outColors.dim(shellVersion)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "%-8s  %s  %s\n", "config:", "ok", displayPath(paths.ConfigFile)); err != nil {
+	if _, err := fmt.Fprintf(output, "%s  %s  %s\n", outColors.header(fmt.Sprintf("%-8s", "config:")), outColors.success("ok"), displayPath(paths.ConfigFile)); err != nil {
 		return err
 	}
 	if usesGit(cfg) {
@@ -857,7 +926,7 @@ func doctor(paths Paths, output io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("git is required for configured Git plugins: %w", err)
 		}
-		if _, err := fmt.Fprintf(output, "%-8s  %s  %s\n", "git:", "ok", displayPath(git)); err != nil {
+		if _, err := fmt.Fprintf(output, "%s  %s  %s\n", outColors.header(fmt.Sprintf("%-8s", "git:")), outColors.success("ok"), displayPath(git)); err != nil {
 			return err
 		}
 	}
@@ -868,10 +937,10 @@ func doctor(paths Paths, output io.Writer) error {
 	if !valid {
 		return fmt.Errorf("lockfile is stale or selected plugin files are missing")
 	}
-	if _, err := fmt.Fprintf(output, "%-8s  %s  %s\n", "lock:", "ok", displayPath(paths.LockFile(profile))); err != nil {
+	if _, err := fmt.Fprintf(output, "%s  %s  %s\n", outColors.header(fmt.Sprintf("%-8s", "lock:")), outColors.success("ok"), displayPath(paths.LockFile(profile))); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(output, "\nNo problems found")
+	_, err = fmt.Fprintln(output, "\n"+outColors.success("No problems found"))
 	return err
 }
 
@@ -921,7 +990,7 @@ func cleanUnownedSources(dataDirectory string, cfg config.Config, log logger) er
 		return err
 	}
 	for _, path := range removed {
-		log.verboseWarning("Removed", installDisplayPath(dataDirectory, path))
+		log.verboseWarning("Removed", log.dim(installDisplayPath(dataDirectory, path)))
 	}
 	return nil
 }
@@ -1070,7 +1139,7 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 
 // writeError prints a failure as a blank line followed by an error prefix.
 func writeError(diagnostics io.Writer, err error) {
-	_, _ = fmt.Fprintf(diagnostics, "\n%s %s\n", colors{enabled: colorEnabled(color, isTerminal(diagnostics))}.error("error:"), err)
+	_, _ = fmt.Fprintf(diagnostics, "\n%s %s\n", writerColors(diagnostics).error("error:"), err)
 }
 
 // RuntimeContext reports settings to non-Cobra callers, delegating paths to ResolvePaths.

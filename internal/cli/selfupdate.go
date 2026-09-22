@@ -29,16 +29,16 @@ func newSelfUpdateCommand() *cobra.Command {
 			result, err := runUpdate(cmd.Context(), selfupdate.Options{
 				CurrentVersion: Version,
 				Force:          force,
-				Diagnostics:    diagnostics,
+				Diagnostics:    styledLines(diagnostics, ansiStatusColor),
 			})
 			if err != nil {
 				return err
 			}
 			if !result.Updated {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "shelf %s is up to date\n", result.Next)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s shelf %s is up to date\n", writerColors(cmd.OutOrStdout()).success(successMark), result.Next)
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "updated shelf: %s -> %s\n", result.Previous, result.Next)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s updated shelf: %s -> %s\n", writerColors(cmd.OutOrStdout()).success(successMark), result.Previous, result.Next)
 			return err
 		},
 	}

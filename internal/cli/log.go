@@ -55,6 +55,9 @@ func (l logger) verboseWarning(prefix, message string) {
 	_, _ = fmt.Fprintf(l.diagnostics, "%s %s\n", l.colors.warning(prefix), message)
 }
 
+// dim styles a message fragment as a secondary detail, such as a path.
+func (l logger) dim(text string) string { return l.colors.dim(text) }
+
 func (l logger) warning(prefix, message string) {
 	if l.quiet {
 		return

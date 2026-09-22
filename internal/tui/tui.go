@@ -1,4 +1,5 @@
-// Package tui implements the interactive terminal picker used by remove --interactive.
+// Package tui implements the interactive terminal prompts used by shelf commands:
+// the checkbox picker behind remove --interactive and the line prompts behind init.
 package tui
 
 import (

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"shelf/internal/config"
 	"shelf/internal/lock"
 	"shelf/internal/source"
 	"shelf/internal/tui"
@@ -396,8 +399,12 @@ func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
 	t.Setenv("SHELF_CONFIG_FILE", configFile)
 	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
 
-	if err := Execute([]string{"remove", "fzf"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	var output bytes.Buffer
+	if err := Execute([]string{"remove", "fzf"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "✓ removed: fzf") {
+		t.Fatalf("remove output = %q, want ✓ removed: fzf", output.String())
 	}
 	contents, err := os.ReadFile(configFile)
 	if err != nil {
@@ -425,8 +432,12 @@ func TestAddWritesProtoField(t *testing.T) {
 	t.Setenv("SHELF_CONFIG_FILE", configFile)
 	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
 
-	if err := Execute([]string{"add", "private", "--github", "rubiin/repository", "--proto", "ssh"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	var output bytes.Buffer
+	if err := Execute([]string{"add", "private", "--github", "rubiin/repository", "--proto", "ssh"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "✓ added: private") {
+		t.Fatalf("add output = %q, want ✓ added: private", output.String())
 	}
 	contents, err := os.ReadFile(configFile)
 	if err != nil {
@@ -602,6 +613,257 @@ func TestRemoveInteractiveWorksWithoutLockFile(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), "plugins.beta") {
 		t.Fatalf("beta lost: %s", contents)
+	}
+}
+
+// initTestEnv points shelf at a temporary config directory and returns the path.
+func initTestEnv(t *testing.T) (directory, configDir, configFile string) {
+	t.Helper()
+	directory = t.TempDir()
+	configDir = filepath.Join(directory, "config")
+	configFile = filepath.Join(configDir, "config.toml")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	return directory, configDir, configFile
+}
+
+func TestInitPromptsForShellAndConfirm(t *testing.T) {
+	_, _, configFile := initTestEnv(t)
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, out io.Writer) (config.Shell, error) {
+		_, _ = fmt.Fprintln(out, "shell prompt")
+		return config.Zsh, nil
+	}
+	initConfirmPrompt = func(path string, _ *bufio.Reader, out io.Writer) (bool, error) {
+		if path != configFile {
+			t.Errorf("confirm path = %q, want %q", path, configFile)
+		}
+		_, _ = fmt.Fprintln(out, "confirm prompt")
+		return true, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"init"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	want := "shell prompt\nconfirm prompt\n✓ initialized zsh config at " + configFile + "\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != config.DefaultConfig(config.Zsh) {
+		t.Fatalf("config contents = %q, want %q", contents, config.DefaultConfig(config.Zsh))
+	}
+}
+
+func TestInitDeclinedByUser(t *testing.T) {
+	_, _, configFile := initTestEnv(t)
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		return config.Bash, nil
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		return false, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"init"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty when declined", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "aborted") {
+		t.Fatalf("stderr = %q, missing aborted message", stderr.String())
+	}
+	if _, err := os.Stat(configFile); !os.IsNotExist(err) {
+		t.Fatalf("config created despite declined confirmation: %v", err)
+	}
+}
+
+func TestInitShellFlagSkipsShellPrompt(t *testing.T) {
+	_, _, configFile := initTestEnv(t)
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		t.Fatal("shell prompt shown despite --shell flag")
+		return "", nil
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		return true, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"init", "--shell", "bash"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "initialized bash config at "+configFile+"\n") {
+		t.Fatalf("stdout = %q, missing bash success message", stdout.String())
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != config.DefaultConfig(config.Bash) {
+		t.Fatalf("config contents = %q, want %q", contents, config.DefaultConfig(config.Bash))
+	}
+}
+
+func TestInitNonInteractiveSkipsPrompts(t *testing.T) {
+	_, _, configFile := initTestEnv(t)
+	t.Setenv("SHELF_SHELL", "bash")
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		t.Fatal("shell prompt shown in non-interactive mode")
+		return "", nil
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		t.Fatal("confirm prompt shown in non-interactive mode")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"init", "--non-interactive"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "initialized bash config at "+configFile+"\n") {
+		t.Fatalf("stdout = %q, missing bash success message", stdout.String())
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != config.DefaultConfig(config.Bash) {
+		t.Fatalf("config contents = %q, want %q", contents, config.DefaultConfig(config.Bash))
+	}
+}
+
+func TestInitDoesNotOverwriteExistingConfig(t *testing.T) {
+	_, configDir, configFile := initTestEnv(t)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("# user config\n")
+	if err := os.WriteFile(configFile, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		t.Fatal("shell prompt shown when config already exists")
+		return "", nil
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		t.Fatal("confirm prompt shown when config already exists")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"init"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty when config already exists", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "config already exists at "+configFile) {
+		t.Fatalf("stderr = %q, missing already-exists message", stderr.String())
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != string(original) {
+		t.Fatalf("existing config overwritten: %q", contents)
+	}
+}
+
+func TestInitExistingConfigInNonInteractiveMode(t *testing.T) {
+	_, configDir, configFile := initTestEnv(t)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("# user config\n")
+	if err := os.WriteFile(configFile, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		t.Fatal("shell prompt shown in non-interactive mode")
+		return "", nil
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		t.Fatal("confirm prompt shown in non-interactive mode")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"init", "--non-interactive"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty when config already exists", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "config already exists at "+configFile) {
+		t.Fatalf("stderr = %q, missing already-exists message", stderr.String())
+	}
+}
+
+func TestInitPromptErrorStopsInit(t *testing.T) {
+	_, _, configFile := initTestEnv(t)
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		return "", errors.New("stdin closed")
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		t.Fatal("confirm prompt shown after shell prompt failed")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	if err := Execute([]string{"init"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "stdin closed") {
+		t.Fatalf("err = %v, want stdin-closed error", err)
+	}
+	if _, err := os.Stat(configFile); !os.IsNotExist(err) {
+		t.Fatalf("config created despite prompt error: %v", err)
 	}
 }
 
