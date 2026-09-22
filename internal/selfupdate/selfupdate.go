@@ -75,7 +75,7 @@ func archiveName(goos, goarch string) (string, error) {
 	default:
 		return "", fmt.Errorf("self-update has no release archive for %s/%s", goos, goarch)
 	}
-	return "shelf_" + strings.Title(goos) + "_" + arch + ".tar.gz", nil
+	return "shelf_" + goos + "_" + arch + ".tar.gz", nil
 }
 
 // Update fetches the latest release and, when it differs from the current version,
