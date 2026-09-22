@@ -290,9 +290,20 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringToStringVar(&addHooks, "hooks", nil, "plugin hooks")
 	command.AddCommand(addCommand)
 
-	command.AddCommand(&cobra.Command{Use: "edit", Short: "Open the configuration in an editor", RunE: func(_ *cobra.Command, _ []string) error {
-		return withConfigLock(accessWrite, editConfig)
-	}})
+	command.AddCommand(&cobra.Command{
+		Use:   "edit",
+		Short: "Open the configuration in an editor",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return withConfigLock(accessWrite, func(paths Paths) error {
+				if err := editConfig(paths); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s edited: %s\n", writerColors(cmd.OutOrStdout()).success(successMark), paths.ConfigFile)
+				return err
+			})
+		},
+	})
 	var removeInteractive bool
 	removeCommand := &cobra.Command{
 		Use:   "remove [NAME]",

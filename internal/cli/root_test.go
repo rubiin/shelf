@@ -224,8 +224,12 @@ func TestEditRunsEditorFromQuotedPath(t *testing.T) {
 	t.Setenv("SHELF_EDITOR", "'"+editor+"' --wait")
 	t.Setenv("SHELF_EDITOR_CAPTURE", capture)
 
-	if err := Execute([]string{"edit"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	var stdout bytes.Buffer
+	if err := Execute([]string{"edit"}, &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
+	}
+	if stdout.String() != "✓ edited: "+configFile+"\n" {
+		t.Fatalf("edit output = %q, want ✓ edited: %s", stdout.String(), configFile)
 	}
 	contents, err := os.ReadFile(capture)
 	if err != nil {
