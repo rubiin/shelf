@@ -206,9 +206,10 @@ func TestUpdateForceUpdatesADevelopmentBuild(t *testing.T) {
 func TestUpdateInstallsTheLatestRelease(t *testing.T) {
 	archive := buildArchive(t, "new")
 	archiveName := archiveNameFor(t)
+	// The checksums asset uses GoReleaser's default "<project>_<version>_checksums.txt" name.
 	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
-		archiveName:     string(archive),
-		"checksums.txt": checksumLine(t, archiveName, archive),
+		archiveName:                 string(archive),
+		"shelf_2.0.0_checksums.txt": checksumLine(t, archiveName, archive),
 	})
 	pointAPIAt(t, server)
 	directory := t.TempDir()
@@ -286,5 +287,46 @@ func TestUpdateRejectsAMissingArchiveAsset(t *testing.T) {
 		t.Fatal("self-update succeeded without an archive asset")
 	} else if !strings.Contains(err.Error(), archiveName) {
 		t.Errorf("error = %v, want a mention of %s", err, archiveName)
+	}
+}
+
+func TestChecksumsURLAcceptsGoReleaserNaming(t *testing.T) {
+	tests := []struct {
+		name   string
+		assets []asset
+		want   string
+		ok     bool
+	}{
+		{name: "exact name", assets: []asset{{Name: "checksums.txt", BrowserDownloadURL: "a"}}, want: "a", ok: true},
+		{name: "versioned name", assets: []asset{{Name: "shelf_0.4.1_checksums.txt", BrowserDownloadURL: "b"}}, want: "b", ok: true},
+		{name: "missing", assets: []asset{{Name: "shelf_Linux_x86_64.tar.gz", BrowserDownloadURL: "c"}}, ok: false},
+		{name: "no download URL", assets: []asset{{Name: "checksums.txt"}}, ok: false},
+	}
+	for _, test := range tests {
+		got, ok := checksumsURL(release{Assets: test.assets})
+		if ok != test.ok || got != test.want {
+			t.Errorf("%s: checksumsURL = %q, %v, want %q, %v", test.name, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+// TestFetchReleaseDecodesGitHubJSONKeys guards the snake_case keys GitHub really
+// sends: encoding/json only matches underscored keys to fields via explicit tags.
+func TestFetchReleaseDecodesGitHubJSONKeys(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"tag_name":"v1.2.3","assets":[{"name":"shelf_Linux_x86_64.tar.gz","browser_download_url":"https://example.com/shelf_Linux_x86_64.tar.gz"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	pointAPIAt(t, server)
+
+	latest, err := fetchRelease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.TagName != "v1.2.3" {
+		t.Errorf("TagName = %q, want v1.2.3", latest.TagName)
+	}
+	if url, ok := assetURL(latest, "shelf_Linux_x86_64.tar.gz"); !ok || url != "https://example.com/shelf_Linux_x86_64.tar.gz" {
+		t.Errorf("assetURL = %q, %v, want the browser download URL", url, ok)
 	}
 }

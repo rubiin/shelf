@@ -47,14 +47,17 @@ type Result struct {
 
 // asset is one release download listed by the GitHub API.
 type asset struct {
-	Name               string
-	BrowserDownloadURL string
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
 // release is the part of the GitHub release payload self-update reads.
+// The tags match GitHub's snake_case keys: without them encoding/json would not
+// match "tag_name" or "browser_download_url" to these fields and they would
+// decode empty.
 type release struct {
-	TagName string
-	Assets  []asset
+	TagName string  `json:"tag_name"`
+	Assets  []asset `json:"assets"`
 }
 
 // archiveName returns the GoReleaser archive name for a platform, matching the
@@ -116,9 +119,9 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		return Result{}, err
 	}
 	logf(options.Diagnostics, "Verifying %s", name)
-	checksums, ok := assetURL(latest, "checksums.txt")
+	checksums, ok := checksumsURL(latest)
 	if !ok {
-		return Result{}, fmt.Errorf("release %s has no checksums.txt asset", latest.TagName)
+		return Result{}, fmt.Errorf("release %s has no checksums asset", latest.TagName)
 	}
 	if err := verifyChecksum(ctx, checksums, name, archive); err != nil {
 		return Result{}, err
@@ -171,6 +174,21 @@ func fetchRelease(ctx context.Context) (release, error) {
 func assetURL(latest release, name string) (string, bool) {
 	for _, candidate := range latest.Assets {
 		if candidate.Name == name && candidate.BrowserDownloadURL != "" {
+			return candidate.BrowserDownloadURL, true
+		}
+	}
+	return "", false
+}
+
+// checksumsURL returns the release's checksums asset. GoReleaser names the file
+// "<project>_<version>_checksums.txt" by default, so the exact name is tried
+// first and any asset ending in "checksums.txt" is accepted as a fallback.
+func checksumsURL(latest release) (string, bool) {
+	if url, ok := assetURL(latest, "checksums.txt"); ok {
+		return url, true
+	}
+	for _, candidate := range latest.Assets {
+		if strings.HasSuffix(candidate.Name, "checksums.txt") && candidate.BrowserDownloadURL != "" {
 			return candidate.BrowserDownloadURL, true
 		}
 	}
