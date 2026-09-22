@@ -2,8 +2,13 @@
   <img src="./logo.png" width="200" alt="Shelf" />
 </p>
 <h1 align="center">Shelf</h1>
+
 <p align="center">
-  <em>Fast, configurable shell plugin manager for both bash and zsh heavily inspired from sheldon, zinit and zplug.</em>
+  <em>Your shell. Your plugins. One shelf.</em>
+</p>
+
+<p align="center">
+  <em>Modern, fast, configurable shell plugin manager for both bash and zsh heavily inspired from sheldon, zinit and zplug.</em>
 </p>
 
 <p align="center">

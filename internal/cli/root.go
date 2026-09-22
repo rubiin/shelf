@@ -58,7 +58,7 @@ type Context struct {
 func NewRoot() *cobra.Command {
 	command := &cobra.Command{
 		Use:           "shelf",
-		Short:         "Manage shell plugins",
+		Short:         "Modern, fast, configurable shell plugin manager for both bash and zsh",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
