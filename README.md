@@ -179,7 +179,7 @@ shelf edit
 shelf remove NAME
 shelf remove --interactive
 shelf completions SHELL
-shelf version
+shelf --version
 ```
 
 `lock` and `source` install plugins concurrently by default, with up to eight
@@ -284,6 +284,11 @@ cloneopts = ["--single-branch", "--filter=blob:none"]
 --reinstall` or `shelf source --relock` to re-clone an already installed source
 with new options. Both are recorded in the runtime lock, so reinstalls keep the
 exact clone behavior.
+
+`remote` downloads are conditional after the first lock: the response's `ETag`
+is recorded in the runtime lock, and later `shelf lock`, `shelf source`, and
+`shelf update` runs send it as `If-None-Match`. A `304 Not Modified` answer skips
+re-downloading the unchanged file entirely.
 
 A plugin that needs a compile or generation step before its shell files can be
 sourced sets `build` to a list of shell commands, run in the repository root when

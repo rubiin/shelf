@@ -143,7 +143,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto, Remote: plugin.Remote,
 		Local: plugin.Local, Optional: plugin.Optional, Ref: plugin.Rev, Branch: plugin.Branch,
 		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
-		CloneOpts: plugin.CloneOpts, Depth: plugin.Depth,
+		ETag: ctx.PreviousETags[name], CloneOpts: plugin.CloneOpts, Depth: plugin.Depth,
 	})
 	if err != nil {
 		return LockedPlugin{}, fmt.Errorf("install plugin %q: %w", name, err)
@@ -186,7 +186,18 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if len(apply) == 0 {
 		apply = []string{"source"}
 	}
-	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}, nil
+	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, ETag: installed.ETag, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}, nil
+}
+
+// PluginETags maps each plugin's name to the remote validator its lock entry recorded, for a conditional GET on the next update.
+func PluginETags(locked LockedConfig) map[string]string {
+	etags := make(map[string]string)
+	for _, plugin := range locked.Plugins {
+		if plugin.ETag != "" {
+			etags[plugin.Name] = plugin.ETag
+		}
+	}
+	return etags
 }
 
 // runBuild executes each build command with the POSIX shell in the plugin's source root; shelf builds only the argv, never a concatenated shell string.

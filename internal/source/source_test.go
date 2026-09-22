@@ -440,6 +440,152 @@ func TestInstallerDownloadsIntoTheSourceLayout(t *testing.T) {
 	}
 }
 
+func TestInstallerRecordsRemoteETag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("ETag", `"573a1e10"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+	}))
+	defer server.Close()
+
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugin.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.ETag != `"573a1e10"` {
+		t.Fatalf("recorded etag = %q, want %q", installed.ETag, `"573a1e10"`)
+	}
+}
+
+// TestInstaller304KeepsTheInstalledFile verifies that a stored validator makes the GET conditional, and that a 304 leaves the installed file untouched.
+func TestInstaller304KeepsTheInstalledFile(t *testing.T) {
+	var conditional int
+	var bodyWrites int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("If-None-Match") == `"573a1e10"` {
+			conditional++
+			writer.WriteHeader(http.StatusNotModified)
+			return
+		}
+		writer.Header().Set("ETag", `"573a1e10"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+		bodyWrites++
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installer := NewInstaller(dataDir)
+	request := Request{Name: "remote", Remote: server.URL + "/plugin.zsh", ETag: `"573a1e10"`}
+	// The validator is only honored when the installed file still exists, so seed it first.
+	_, file, err := RemoteDirectory(dataDir, request.Remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("echo installed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	installed, err := installer.Install(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Skipped {
+		t.Fatal("a 304 must not mark the plugin skipped, or it would drop from the lock")
+	}
+	if conditional != 1 {
+		t.Fatalf("conditional requests = %d, want 1", conditional)
+	}
+	if bodyWrites != 0 {
+		t.Fatalf("body writes = %d, want 0 for a 304", bodyWrites)
+	}
+	contents, err := os.ReadFile(installed.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo installed\n" {
+		t.Fatalf("installed file = %q, want the untouched seed", contents)
+	}
+	if installed.ETag != `"573a1e10"` {
+		t.Fatalf("recorded etag = %q, want the validator kept", installed.ETag)
+	}
+}
+
+// TestInstallerConditionalGetNeedsInstalledFile verifies a stored validator is not sent when the installed file is gone, so a missing file is always refetched.
+func TestInstallerConditionalGetNeedsInstalledFile(t *testing.T) {
+	var conditional int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("If-None-Match") != "" {
+			conditional++
+		}
+		writer.Header().Set("ETag", `"573a1e10"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+	}))
+	defer server.Close()
+
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugin.zsh", ETag: `"573a1e10"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conditional != 0 {
+		t.Fatalf("conditional requests = %d, want 0 without an installed file", conditional)
+	}
+	contents, err := os.ReadFile(installed.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo remote\n" {
+		t.Fatalf("remote contents = %q", contents)
+	}
+}
+
+// TestInstallerReplacesFileWhenValidatorChanges verifies a conditional GET with a changed validator downloads the new body and records the new ETag.
+func TestInstallerReplacesFileWhenValidatorChanges(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("If-None-Match") == `"v2"` {
+			writer.WriteHeader(http.StatusNotModified)
+			return
+		}
+		writer.Header().Set("ETag", `"v2"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo latest\n"))
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installer := NewInstaller(dataDir)
+	url := server.URL + "/plugin.zsh"
+	_, file, err := RemoteDirectory(dataDir, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("echo stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The lock still holds the old validator, so the server must serve a new body.
+	installed, err := installer.Install(context.Background(), Request{Name: "remote", Remote: url, ETag: `"v1"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(installed.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo latest\n" {
+		t.Fatalf("remote contents = %q, want the new body", contents)
+	}
+	if installed.ETag != `"v2"` {
+		t.Fatalf("recorded etag = %q, want %q", installed.ETag, `"v2"`)
+	}
+}
+
 // TestInstallerShallowClonesGitSources verifies fresh installs fetch only the requested ref's tip, and that file:// URLs exercise the real shallow transport.
 func TestInstallerShallowClonesGitSources(t *testing.T) {
 	repository := t.TempDir()

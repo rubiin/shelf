@@ -19,11 +19,19 @@ func installRemote(ctx context.Context, directory, file string, request Request)
 	if err != nil {
 		return Installed{}, fmt.Errorf("download remote source: %w", err)
 	}
+	// A stored validator and a file on disk make the GET conditional: a server answering
+	// 304 Not Modified confirms the installed file is current, so the body is never fetched.
+	if request.ETag != "" && fileExists(file) {
+		httpRequest.Header.Set("If-None-Match", request.ETag)
+	}
 	response, err := remoteHTTPClient.Do(httpRequest)
 	if err != nil {
 		return Installed{}, fmt.Errorf("download remote source: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusNotModified {
+		return Installed{Directory: directory, File: file, ETag: request.ETag}, nil
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, remoteDrainLimit))
 		return Installed{}, fmt.Errorf("download remote source: HTTP %s", response.Status)
@@ -51,5 +59,11 @@ func installRemote(ctx context.Context, directory, file string, request Request)
 	if err := os.Rename(temporaryName, file); err != nil {
 		return Installed{}, err
 	}
-	return Installed{Directory: directory, File: file}, nil
+	return Installed{Directory: directory, File: file, ETag: response.Header.Get("ETag")}, nil
+}
+
+// fileExists reports whether a path names an existing file, so a conditional GET only replaces what is actually installed.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

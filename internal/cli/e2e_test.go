@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1429,5 +1431,89 @@ func TestLockStreamsBuildOutputToStderr(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "built-here") {
 		t.Fatalf("lock stderr = %q, want build output", stderr.String())
+	}
+}
+
+// TestRemoteUpdateUsesConditionalGet verifies the whole pipeline: lock records the response
+// validator, and the next update sends it as If-None-Match, so a 304 skips re-download.
+func TestRemoteUpdateUsesConditionalGet(t *testing.T) {
+	var unconditional, conditional, bodyWrites int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("If-None-Match") == `"573a1e10"` {
+			conditional++
+			writer.WriteHeader(http.StatusNotModified)
+			return
+		}
+		unconditional++
+		writer.Header().Set("ETag", `"573a1e10"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote-e2e\n"))
+		bodyWrites++
+	}))
+	defer server.Close()
+
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nremote = \"" + server.URL + "/demo.plugin.zsh\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(directory, "data", "plugins.lock")
+	locked, err := lock.Read(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || locked.Plugins[0].ETag != `"573a1e10"` {
+		t.Fatalf("locked plugins = %+v, want one recording the validator", locked.Plugins)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"update"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "demo.plugin.zsh") {
+		t.Fatalf("update output = %q", output.String())
+	}
+	// The 304 must leave the installed file untouched.
+	installedFile := filepath.Join(directory, "data", "downloads", "127.0.0.1", "demo.plugin.zsh")
+	contents, err := os.ReadFile(installedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo remote-e2e\n" {
+		t.Fatalf("installed file = %q", contents)
+	}
+	if unconditional != 1 {
+		t.Fatalf("unconditional downloads = %d, want 1 for the first lock", unconditional)
+	}
+	if conditional != 1 {
+		t.Fatalf("conditional downloads = %d, want 1 for the update", conditional)
+	}
+	if bodyWrites != 1 {
+		t.Fatalf("body writes = %d, want 1; the 304 must skip re-download", bodyWrites)
+	}
+}
+
+func TestVersionFlagPrintsVersion(t *testing.T) {
+	var output bytes.Buffer
+	if err := Execute([]string{"--version"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "shelf version " + Version + "\n"; output.String() != want {
+		t.Fatalf("version output = %q, want %q", output.String(), want)
+	}
+}
+
+// TestVersionIsNotACommand covers the shell update from `shelf version` to `shelf --version`.
+func TestVersionIsNotACommand(t *testing.T) {
+	err := Execute([]string{"version"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("`shelf version` still runs as a subcommand; it should be a --version flag")
 	}
 }

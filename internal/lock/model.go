@@ -11,6 +11,8 @@ type Context struct {
 	Shell             string
 	// Templates are the resolved apply templates, recorded so rendering needs no config read.
 	Templates map[string]string
+	// PreviousETags are the remote validators of the previous lock, keyed by plugin name; installs send them as If-None-Match.
+	PreviousETags map[string]string
 	// Diagnostics receives build hook output; nil discards it.
 	Diagnostics io.Writer
 }
@@ -50,8 +52,10 @@ type LockedPlugin struct {
 	Inline string `toml:"inline,omitempty"`
 	Source string `toml:"source,omitempty"`
 	// URL is the resolved clone URL, which lets Restore reinstall the revision from the lock alone.
-	URL       string            `toml:"url,omitempty"`
-	Rev       string            `toml:"rev,omitempty"`
+	URL string `toml:"url,omitempty"`
+	Rev string `toml:"rev,omitempty"`
+	// ETag is a remote source's response validator, recorded so updates can fetch conditionally and skip an unchanged body.
+	ETag      string            `toml:"etag,omitempty"`
 	Directory string            `toml:"directory,omitempty"`
 	Files     []string          `toml:"files,omitempty"`
 	Apply     []string          `toml:"apply,omitempty"`

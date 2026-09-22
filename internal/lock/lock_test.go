@@ -321,6 +321,63 @@ func TestBuildPassesCloneOptionsAndDepthToInstaller(t *testing.T) {
 	}
 }
 
+// remoteETagInstaller installs a single file carrying the response validator a remote source would record.
+type remoteETagInstaller struct {
+	directory string
+	etag      string
+}
+
+func (installer remoteETagInstaller) Install(_ context.Context, request source.Request) (source.Installed, error) {
+	return source.Installed{Directory: installer.directory, File: filepath.Join(installer.directory, request.Name+".plugin.zsh"), ETag: installer.etag}, nil
+}
+
+func TestBuildPassesStoredRemoteETagToInstaller(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"remote": {Remote: "https://example.com/plugin.zsh"},
+	}}
+	var request source.Request
+	ctx := Context{Shell: "zsh", PreviousETags: map[string]string{"remote": `"573a1e10"`}}
+	if _, err := Build(ctx, cfg, testInstaller{directory: t.TempDir(), lastRequest: &request}, ModeUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if request.ETag != `"573a1e10"` {
+		t.Fatalf("installer etag = %q, want the previous lock's validator", request.ETag)
+	}
+}
+
+func TestBuildRecordsRemoteETagInLock(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "remote.plugin.zsh")
+	if err := os.WriteFile(file, []byte("echo remote\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"remote": {Remote: "https://example.com/plugin.zsh"},
+	}}
+	locked, err := Build(Context{Shell: "zsh"}, cfg, remoteETagInstaller{directory: directory, etag: `"573a1e10"`}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 {
+		t.Fatalf("locked plugins = %+v", locked.Plugins)
+	}
+	if locked.Plugins[0].ETag != `"573a1e10"` {
+		t.Fatalf("locked etag = %q, want the validator the installer recorded", locked.Plugins[0].ETag)
+	}
+}
+
+func TestPluginETagsExtractsRemoteValidators(t *testing.T) {
+	locked := LockedConfig{Plugins: []LockedPlugin{
+		{Name: "remote", ETag: `"v1"`},
+		{Name: "plain"},
+		{Name: "other", ETag: `"v2"`},
+	}}
+	etags := PluginETags(locked)
+	if len(etags) != 2 || etags["remote"] != `"v1"` || etags["other"] != `"v2"` || etags["plain"] != "" {
+		t.Fatalf("plugin etags = %v", etags)
+	}
+}
+
 func TestRevisionManifestPersistsGitRevisions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugins.lock")
 	manifest := RevisionManifest{Plugins: []RevisionPlugin{{

@@ -59,6 +59,13 @@ func TestFastReadMatchesTomlDecode(t *testing.T) {
 				Files:     []string{"/data/repos/github.com/owner/repo/repo.plugin.zsh"},
 				Apply:     []string{"source"},
 			},
+			{
+				Name:      "remote",
+				Directory: "/data/downloads/example.com",
+				Files:     []string{"/data/downloads/example.com/plugin.zsh"},
+				Apply:     []string{"source"},
+				ETag:      `"573a1e10"`,
+			},
 		},
 	}
 
@@ -127,6 +134,16 @@ func TestFastReadHandlesEveryWrittenLock(t *testing.T) {
 				Name:      "spaced",
 				Directory: `C:\Users\me\plugins\my plugin`,
 				Files:     []string{`C:\Users\me\plugins\my plugin\init.zsh`},
+			}},
+		},
+		"remote with validator": {
+			Shell: "zsh",
+			Plugins: []LockedPlugin{{
+				Name:      "remote",
+				Directory: "/data/downloads/example.com",
+				Files:     []string{"/data/downloads/example.com/plugin.zsh"},
+				Apply:     []string{"source"},
+				ETag:      `"573a1e10"`,
 			}},
 		},
 	}

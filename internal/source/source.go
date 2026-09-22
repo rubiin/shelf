@@ -29,6 +29,8 @@ type Request struct {
 	File      string
 	Update    bool
 	Reinstall bool
+	// ETag is the validator recorded in the previous lock; when set, a remote download becomes a conditional GET.
+	ETag string
 	// CloneOpts are extra arguments passed to git clone; Depth sets --depth (nil keeps the shallow default, 0 clones full history).
 	CloneOpts []string
 	Depth     *int
@@ -72,6 +74,8 @@ type Installed struct {
 	File     string
 	Revision string
 	Skipped  bool
+	// ETag is the remote response validator, recorded in the lock so the next update fetches conditionally.
+	ETag string
 }
 
 type Installer interface {

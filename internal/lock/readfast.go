@@ -294,6 +294,8 @@ func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 			plugin.URL = text
 		case "rev":
 			plugin.Rev = text
+		case "etag":
+			plugin.ETag = text
 		case "directory":
 			plugin.Directory = text
 		default:
@@ -387,6 +389,8 @@ func pluginFieldBit(key string) (uint16, bool) {
 		return 1 << 3, true
 	case "rev":
 		return 1 << 4, true
+	case "etag":
+		return 1 << 8, true
 	case "directory":
 		return 1 << 5, true
 	case "files":

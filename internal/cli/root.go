@@ -321,14 +321,8 @@ func NewRoot() *cobra.Command {
 	initCommand.Flags().StringVar(&initShell, "shell", "", "shell: bash or zsh")
 	command.AddCommand(initCommand)
 	command.AddCommand(newSelfUpdateCommand())
-	command.AddCommand(&cobra.Command{
-		Use:   "version",
-		Short: "Print shelf version information",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "shelf version "+Version)
-			return err
-		},
-	})
+	// A non-empty Version makes Cobra install a root --version flag that prints `shelf version <Version>`.
+	command.Version = Version
 	return command
 }
 
@@ -377,6 +371,15 @@ type sourceInputs struct {
 	Shell           string
 }
 
+// previousETags reads the previous lock's remote validators, so update and relock runs ask the server to skip bodies that have not changed.
+func previousETags(paths Paths) map[string]string {
+	locked, err := lock.Read(paths.LockFile(profile))
+	if err != nil {
+		return nil
+	}
+	return lock.PluginETags(locked)
+}
+
 // buildDiagnostics returns the writer build output streams to, or nil when quiet so the lock discards it.
 func buildDiagnostics(writer io.Writer) io.Writer {
 	if quiet {
@@ -403,7 +406,7 @@ func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) 
 	return sourceInputs{
 		Config:          cfg,
 		BaseFingerprint: baseFingerprint,
-		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), Diagnostics: buildDiagnostics(diagnostics)},
+		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Diagnostics: buildDiagnostics(diagnostics)},
 		Shell:           string(shell),
 	}, nil
 }
@@ -489,7 +492,7 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err != nil {
 		return err
 	}
-	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), Diagnostics: buildDiagnostics(diagnostics)}
+	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Diagnostics: buildDiagnostics(diagnostics)}
 	cfg, err = applyRevisionManifest(paths, cfg, mode)
 	if err != nil {
 		return err
