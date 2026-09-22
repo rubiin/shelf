@@ -69,7 +69,7 @@ func TestSourceRendersZcompileGuardForZshOnly(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configFile := filepath.Join(directory, "config-"+test.shell+".toml")
-			config := fmt.Sprintf("shell = %q\n\n[plugins.demo]\nlocal = %q\napply = [\"zcompile\", \"source\"]\nuse = [%q]\n", test.shell, pluginDirectory, test.use)
+			config := fmt.Sprintf("shell = %q\n\n[plugins.demo]\nlocal = %q\napply = [\"zcompile\"]\nuse = [%q]\n", test.shell, pluginDirectory, test.use)
 			if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 				t.Fatal(err)
 			}
