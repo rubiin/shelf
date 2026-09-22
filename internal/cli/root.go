@@ -1084,12 +1084,18 @@ func cleanPlugins(paths Paths, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	colors := writerColors(output)
+	if len(removed) == 0 {
+		_, err := fmt.Fprintf(output, "%s nothing to clean\n", colors.success(successMark))
+		return err
+	}
 	for _, path := range removed {
 		if _, err := fmt.Fprintf(output, "removed: %s\n", installDisplayPath(paths.DataDirectory, path)); err != nil {
 			return err
 		}
 	}
-	return nil
+	_, err = fmt.Fprintf(output, "%s cleaned: %d paths\n", colors.success(successMark), len(removed))
+	return err
 }
 
 // cleanUnownedSources prunes installed sources the config no longer owns, before locking.

@@ -1213,7 +1213,7 @@ func TestCleanRemovesUnconfiguredPluginDirectories(t *testing.T) {
 	if err := Execute([]string{"clean"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "removed: plugins/current\nremoved: plugins/obsolete\n" {
+	if output.String() != "removed: plugins/current\nremoved: plugins/obsolete\n✓ cleaned: 2 paths\n" {
 		t.Fatalf("clean output = %q", output.String())
 	}
 	for _, name := range []string{"current", "obsolete"} {
@@ -1260,7 +1260,8 @@ func TestCleanKeepsOwnedSourcesAndPrunesTheRest(t *testing.T) {
 		"removed: repos/github.com/rubiin/gone\n" +
 		"removed: downloads/example.com\n" +
 		"removed: plugins/inline\n" +
-		"removed: plugins/obsolete\n"
+		"removed: plugins/obsolete\n" +
+		"✓ cleaned: 5 paths\n"
 	if output.String() != want {
 		t.Fatalf("clean output = %q, want %q", output.String(), want)
 	}
@@ -1271,6 +1272,31 @@ func TestCleanKeepsOwnedSourcesAndPrunesTheRest(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("unowned plugin directory %q remains: %v", path, err)
 		}
+	}
+}
+
+func TestCleanReportsNothingToRemove(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"plugins/demo\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	var output bytes.Buffer
+	if err := Execute([]string{"clean"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "✓ nothing to clean\n" {
+		t.Fatalf("clean output = %q", output.String())
 	}
 }
 
