@@ -70,6 +70,22 @@ makes builds reproducible. Without `just`, the same build is:
 go build -trimpath -buildvcs=false -ldflags "-s -w" -o shelf ./cmd/shelf
 ```
 
+### Updating
+
+Release installs can update themselves:
+
+```sh
+shelf self-update
+```
+
+`self-update` compares the running version with the latest
+[release](https://github.com/rubiin/shelf/releases), downloads the matching
+archive and its `checksums.txt`, verifies the archive's sha256, and replaces
+the `shelf` binary atomically. Installations managed by a package manager (AUR,
+`.deb`, `.rpm`, `.apk`) should keep updating through the package manager
+instead. Development builds refuse to self-update; pass `--force` to update
+them anyway.
+
 ## Getting started
 
 Initialize a Bash or Zsh configuration:

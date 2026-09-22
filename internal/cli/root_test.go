@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"shelf/internal/config"
+	"shelf/internal/selfupdate"
 )
 
 func TestRootCommands(t *testing.T) {
@@ -27,7 +29,7 @@ func TestRootCommands(t *testing.T) {
 	for _, command := range root.Commands() {
 		commands[command.Name()] = true
 	}
-	for _, name := range []string{"init", "lock", "source", "update", "path", "status", "doctor", "clean", "list", "add", "edit", "remove", "completions", "version"} {
+	for _, name := range []string{"init", "lock", "source", "update", "path", "status", "doctor", "clean", "list", "add", "edit", "remove", "completions", "version", "self-update"} {
 		if !commands[name] {
 			t.Errorf("root command %q is missing", name)
 		}
@@ -44,6 +46,13 @@ func TestRootCommands(t *testing.T) {
 		if add.Flags().Lookup(name) == nil {
 			t.Errorf("add flag %q is missing", name)
 		}
+	}
+	selfUpdate, _, err := root.Find([]string{"self-update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selfUpdate.Flags().Lookup("force") == nil {
+		t.Error("self-update flag --force is missing")
 	}
 	for _, name := range []string{"lock", "source", "update"} {
 		command, _, err := root.Find([]string{name})
@@ -222,5 +231,68 @@ func TestEditRunsEditorFromQuotedPath(t *testing.T) {
 	want := "--wait\n" + configFile + "\n"
 	if string(contents) != want {
 		t.Fatalf("editor arguments = %q, want %q", contents, want)
+	}
+}
+
+func TestSelfUpdateReportsUpToDate(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
+		if options.CurrentVersion != Version {
+			t.Errorf("current version = %q, want the stamped version %q", options.CurrentVersion, Version)
+		}
+		if options.Diagnostics == nil {
+			t.Error("self-update ran without diagnostics")
+		}
+		return selfupdate.Result{Updated: false, Next: "9.9.9"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "shelf 9.9.9 is up to date\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestSelfUpdateReportsTheInstalledVersion(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, _ selfupdate.Options) (selfupdate.Result, error) {
+		return selfupdate.Result{Updated: true, Previous: "1.0.0", Next: "2.0.0"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update", "--force"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "updated shelf: 1.0.0 -> 2.0.0\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestSelfUpdatePassesForce(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
+		if !options.Force {
+			t.Error("--force was not forwarded")
+		}
+		return selfupdate.Result{Updated: false, Next: "1.0.0"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update", "--force"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
 	}
 }

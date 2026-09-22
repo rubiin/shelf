@@ -320,6 +320,7 @@ func NewRoot() *cobra.Command {
 	}
 	initCommand.Flags().StringVar(&initShell, "shell", "", "shell: bash or zsh")
 	command.AddCommand(initCommand)
+	command.AddCommand(newSelfUpdateCommand())
 	command.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print shelf version information",
