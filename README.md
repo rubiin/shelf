@@ -16,6 +16,7 @@
 
 - Git, GitHub, Gist, GitLab, Bitbucket, Codeberg, remote, local, and inline plugins.
 - Optional local plugins
+- Frozen pins: `frozen = true` keeps a plugin's installed version until `--force` or `--reinstall`.
 - Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
 - Per-plugin `cloneopts` and clone `depth` for Git sources, recorded in the lock.
 - Bash and Zsh output with per-plugin file globs and hooks.
@@ -157,10 +158,10 @@ the config.
 
 ```text
 shelf init
-shelf lock [--update | --reinstall] [--concurrency N]
-shelf source [--relock | --update | --reinstall] [--concurrency N]
+shelf lock [--update | --reinstall] [--concurrency N] [--force]
+shelf source [--relock | --update | --reinstall] [--concurrency N] [--force]
 shelf reload
-shelf update [--lock] [--concurrency N]
+shelf update [--lock] [--concurrency N] [--force]
 shelf path
 shelf status
 shelf doctor
@@ -257,7 +258,7 @@ a Git URL or local Git repository. `remote` downloads one file. `local` uses an
 existing file or directory, and `inline` stores shell code directly in TOML.
 
 Plugin options include `use`, `apply`, `profiles`, `hooks`, `build`, `dir`, `file`, `proto`,
-`cloneopts`, and `depth`. `proto` picks the forge protocol (`github`, `gist`,
+`cloneopts`, `depth`, and `frozen`. `proto` picks the forge protocol (`github`, `gist`,
 `gitlab`, `bitbucket`, `codeberg`), one of `https`, `git`, or `ssh`;
 `shelf add --proto ssh` writes the same field. `use` takes recursive glob
 patterns relative to the installed plugin directory.
@@ -278,6 +279,13 @@ cloneopts = ["--single-branch", "--filter=blob:none"]
 --reinstall` or `shelf source --relock` to re-clone an already installed source
 with new options. Both are recorded in the runtime lock, so reinstalls keep the
 exact clone behavior.
+
+A plugin with `frozen = true` keeps its installed version: `shelf update`,
+`shelf lock --update`, and `shelf source --update` skip fetching it, and its
+status shows `Frozen` instead of `Checked`. `shelf lock --reinstall`,
+`shelf source --reinstall`, or `--force` with an update still refreshes it.
+`frozen = true` is recorded in the runtime lock and is safe on `inline`
+plugins, which have no source to fetch.
 
 `remote` downloads are conditional after the first lock: the response's `ETag`
 is recorded in the runtime lock, and later `shelf lock`, `shelf source`, and
@@ -388,7 +396,7 @@ The runtime lock under the data directory is not meant for version control —
 commit the revision manifest instead.
 
 Diagnostics go to stderr: `Loaded` and `Locked` headers, right-aligned
-`Checked` and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and
+`Checked`, `Frozen`, and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and
 `Removed` when `--verbose` is set. A failed command prints `error:` and exits
 with status 2.
 

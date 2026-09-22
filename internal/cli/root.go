@@ -39,6 +39,7 @@ var (
 	dataDir        string
 	configFile     string
 	profile        string
+	forceUpdate    bool
 )
 
 // Context contains the resolved runtime settings shared by commands.
@@ -79,6 +80,9 @@ func NewRoot() *cobra.Command {
 		Short: "Install plugin sources and write the lock file",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if forceUpdate && !update && !reinstall {
+				return fmt.Errorf("--force requires --update or --reinstall")
+			}
 			mode := lock.ModeNormal
 			if update {
 				mode = lock.ModeUpdate
@@ -94,6 +98,7 @@ func NewRoot() *cobra.Command {
 	lockCommand.Flags().BoolVar(&update, "update", false, "update plugin sources")
 	lockCommand.Flags().BoolVar(&reinstall, "reinstall", false, "reinstall plugin sources")
 	lockCommand.Flags().IntVar(&lockConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
+	lockCommand.Flags().BoolVar(&forceUpdate, "force", false, "update frozen plugins too")
 	lockCommand.MarkFlagsMutuallyExclusive("update", "reinstall")
 	command.AddCommand(lockCommand)
 
@@ -104,6 +109,9 @@ func NewRoot() *cobra.Command {
 		Short: "Generate shell code from locked plugins",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if forceUpdate && !sourceUpdate && !sourceReinstall {
+				return fmt.Errorf("--force requires --update or --reinstall")
+			}
 			mode := lock.ModeNormal
 			if sourceUpdate {
 				mode = lock.ModeUpdate
@@ -122,6 +130,7 @@ func NewRoot() *cobra.Command {
 	sourceCommand.Flags().BoolVar(&sourceUpdate, "update", false, "update plugin sources")
 	sourceCommand.Flags().BoolVar(&sourceReinstall, "reinstall", false, "reinstall plugin sources")
 	sourceCommand.Flags().IntVar(&sourceConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
+	sourceCommand.Flags().BoolVar(&forceUpdate, "force", false, "update frozen plugins too")
 	sourceCommand.MarkFlagsMutuallyExclusive("update", "reinstall")
 	command.AddCommand(sourceCommand)
 	command.AddCommand(&cobra.Command{
@@ -165,6 +174,7 @@ func NewRoot() *cobra.Command {
 	}
 	updateCommand.Flags().BoolVar(&updateLock, "lock", false, "write the refreshed lock file without shell output")
 	updateCommand.Flags().IntVar(&updateConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
+	updateCommand.Flags().BoolVar(&forceUpdate, "force", false, "update frozen plugins too")
 	command.AddCommand(updateCommand)
 	command.AddCommand(&cobra.Command{
 		Use:   "path",
@@ -234,6 +244,7 @@ func NewRoot() *cobra.Command {
 	var addUse, addApply, addBuild, addProfiles, addCloneOpts []string
 	var addHooks map[string]string
 	var addDepth int
+	var addFrozen bool
 	addCommand := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Add a plugin to the configuration",
@@ -244,7 +255,7 @@ func NewRoot() *cobra.Command {
 				depth = &addDepth
 			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				if err := config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth}); err != nil {
+				if err := config.Add(paths.ConfigFile, args[0], config.RawPlugin{GitHub: addGitHub, Git: addGit, Gist: addGist, GitLab: addGitLab, Bitbucket: addBitbucket, Codeberg: addCodeberg, Remote: addRemote, Local: addLocal, Optional: addOptional, Inline: addInline, Rev: addRev, Branch: addBranch, Tag: addTag, Proto: addProto, Dir: addDir, File: addFile, Use: addUse, Apply: addApply, Build: addBuild, Profiles: addProfiles, Hooks: addHooks, CloneOpts: addCloneOpts, Depth: depth, Frozen: addFrozen}); err != nil {
 					return err
 				}
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s added: %s\n", writerColors(cmd.OutOrStdout()).success(successMark), args[0])
@@ -274,6 +285,7 @@ func NewRoot() *cobra.Command {
 	addCommand.Flags().StringSliceVar(&addProfiles, "profiles", nil, "plugin profiles")
 	addCommand.Flags().StringSliceVar(&addCloneOpts, "cloneopts", nil, "extra git clone arguments")
 	addCommand.Flags().IntVar(&addDepth, "depth", 0, "git clone depth; 0 clones full history")
+	addCommand.Flags().BoolVar(&addFrozen, "frozen", false, "pin the plugin and skip its update")
 	addCommand.Flags().StringToStringVar(&addHooks, "hooks", nil, "plugin hooks")
 	command.AddCommand(addCommand)
 
@@ -397,7 +409,7 @@ func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) 
 	return sourceInputs{
 		Config:          cfg,
 		BaseFingerprint: baseFingerprint,
-		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Diagnostics: buildDiagnostics(diagnostics)},
+		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Force: forceUpdate, Diagnostics: buildDiagnostics(diagnostics)},
 		Shell:           string(shell),
 	}, nil
 }
@@ -469,11 +481,14 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	log.header("Loaded", fmt.Sprintf("%d plugins %s", len(plugins), log.dim(displayPath(paths.ConfigFile))))
 	for _, name := range plugins {
 		plugin := cfg.Plugins[name]
-		if lock.Active(plugin.Profiles, profile) {
+		switch {
+		case !lock.Active(plugin.Profiles, profile):
+			log.status("Skipped", log.dim(pluginSource(plugin)))
+		case mode == lock.ModeUpdate && !forceUpdate && plugin.Frozen && plugin.Inline == "":
+			log.status("Frozen", log.dim(pluginSource(plugin)))
+		default:
 			log.status("Checked", log.dim(pluginSource(plugin)))
-			continue
 		}
-		log.status("Skipped", log.dim(pluginSource(plugin)))
 	}
 	//  prunes installed sources that the config no longer owns before locking.
 	if err := cleanUnownedSources(paths.DataDirectory, cfg, log); err != nil {
@@ -483,7 +498,7 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err != nil {
 		return err
 	}
-	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Diagnostics: buildDiagnostics(diagnostics)}
+	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Force: forceUpdate, Diagnostics: buildDiagnostics(diagnostics)}
 	cfg, err = applyRevisionManifest(paths, cfg, mode)
 	if err != nil {
 		return err
@@ -671,6 +686,15 @@ func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) 
 	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
+	}
+	log := newLogger(diagnostics)
+	// Update skips frozen plugins unless forced, so their status marks them.
+	for _, name := range lock.PluginNames(inputs.Config) {
+		plugin := inputs.Config.Plugins[name]
+		if forceUpdate || !plugin.Frozen || plugin.Inline != "" || !lock.Active(plugin.Profiles, profile) {
+			continue
+		}
+		log.status("Frozen", log.dim(pluginSource(plugin)))
 	}
 	if err := cleanUnownedSources(paths.DataDirectory, inputs.Config, newLogger(diagnostics)); err != nil {
 		return err

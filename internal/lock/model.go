@@ -13,6 +13,8 @@ type Context struct {
 	Templates map[string]string
 	// PreviousETags are the remote validators of the previous lock, keyed by plugin name; installs send them as If-None-Match.
 	PreviousETags map[string]string
+	// Force refreshes frozen plugins during an update.
+	Force bool
 	// Diagnostics receives build hook output; nil discards it.
 	Diagnostics io.Writer
 }
@@ -63,4 +65,6 @@ type LockedPlugin struct {
 	// CloneOpts and Depth record the clone behavior so Restore reinstalls identically.
 	CloneOpts []string `toml:"cloneopts,omitempty"`
 	Depth     *int     `toml:"depth,omitempty"`
+	// Frozen records that the plugin keeps its pinned version on update.
+	Frozen bool `toml:"frozen,omitempty"`
 }

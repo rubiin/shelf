@@ -228,6 +228,9 @@ func encodePlugin(name string, plugin RawPlugin) string {
 	if plugin.Depth != nil {
 		lines = append(lines, fmt.Sprintf("depth = %d", *plugin.Depth))
 	}
+	if plugin.Frozen {
+		lines = append(lines, "frozen = true")
+	}
 	if len(plugin.Hooks) > 0 {
 		// Every hook shares one subtable, sorted, since a repeated header would redefine it.
 		keys := make([]string, 0, len(plugin.Hooks))

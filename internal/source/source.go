@@ -29,6 +29,8 @@ type Request struct {
 	File      string
 	Update    bool
 	Reinstall bool
+	// Frozen pins the installed version: an update skips fetching a frozen source unless forced.
+	Frozen bool
 	// ETag is the validator recorded in the previous lock; when set, a remote download becomes a conditional GET.
 	ETag string
 	// CloneOpts are extra arguments passed to git clone; Depth sets --depth (nil keeps the shallow default, 0 clones full history).

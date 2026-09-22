@@ -15,6 +15,10 @@ var remoteHTTPClient = http.DefaultClient
 const remoteDrainLimit = 64 << 10
 
 func installRemote(ctx context.Context, directory, file string, request Request) (Installed, error) {
+	// A frozen plugin keeps its installed file: even the conditional GET is skipped.
+	if request.Frozen && fileExists(file) {
+		return Installed{Directory: directory, File: file, ETag: request.ETag}, nil
+	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, request.Remote, nil)
 	if err != nil {
 		return Installed{}, fmt.Errorf("download remote source: %w", err)

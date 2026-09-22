@@ -139,10 +139,12 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if plugin.Inline != "" {
 		return LockedPlugin{Name: name, Inline: plugin.Inline, Hooks: plugin.Hooks}, nil
 	}
+	// Frozen plugins keep their pinned version on update; --force and --reinstall still refresh them.
+	update := mode == ModeUpdate && (!plugin.Frozen || ctx.Force)
 	installed, err := installer.Install(installContext, source.Request{
 		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto, Remote: plugin.Remote,
 		Local: plugin.Local, Optional: plugin.Optional, Ref: plugin.Rev, Branch: plugin.Branch,
-		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: mode == ModeUpdate, Reinstall: mode == ModeReinstall,
+		Tag: plugin.Tag, Dir: plugin.Dir, File: plugin.File, Update: update, Reinstall: mode == ModeReinstall, Frozen: plugin.Frozen,
 		ETag: ctx.PreviousETags[name], CloneOpts: plugin.CloneOpts, Depth: plugin.Depth,
 	})
 	if err != nil {
@@ -186,7 +188,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	if len(apply) == 0 {
 		apply = []string{"source"}
 	}
-	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, ETag: installed.ETag, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}, nil
+	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, ETag: installed.ETag, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth, Frozen: plugin.Frozen}, nil
 }
 
 // PluginETags maps each plugin's name to the remote validator its lock entry recorded, for a conditional GET on the next update.

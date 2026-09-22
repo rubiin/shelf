@@ -55,7 +55,7 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 				return Installed{}, err
 			}
 		}
-	} else if request.Update {
+	} else if request.Update && !request.Frozen {
 		if err := runGitIn(ctx, directory, "fetch", "--all", "--tags"); err != nil {
 			return Installed{}, err
 		}

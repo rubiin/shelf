@@ -366,6 +366,71 @@ func TestBuildRecordsRemoteETagInLock(t *testing.T) {
 	}
 }
 
+func TestBuildSkipsUpdateFetchForFrozenPlugin(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "romkatv/zsh-defer", Frozen: true},
+	}}
+	var request source.Request
+	if _, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir(), lastRequest: &request}, ModeUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if request.Update {
+		t.Error("frozen plugin update = true, want the fetch skipped")
+	}
+	if !request.Frozen {
+		t.Error("frozen flag did not reach the installer")
+	}
+	if request.Reinstall {
+		t.Error("frozen plugin reinstall unexpectedly set")
+	}
+}
+
+func TestBuildForceRefreshesFrozenPluginOnUpdate(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "romkatv/zsh-defer", Frozen: true},
+	}}
+	var request source.Request
+	ctx := Context{Shell: "zsh", Force: true}
+	if _, err := Build(ctx, cfg, testInstaller{directory: t.TempDir(), lastRequest: &request}, ModeUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if !request.Update {
+		t.Error("forced update of a frozen plugin was skipped")
+	}
+	if request.Reinstall {
+		t.Error("forced update reinstalled instead of updating")
+	}
+}
+
+func TestBuildReinstallRefreshesFrozenPlugin(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "romkatv/zsh-defer", Frozen: true},
+	}}
+	var request source.Request
+	if _, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir(), lastRequest: &request}, ModeReinstall); err != nil {
+		t.Fatal(err)
+	}
+	if !request.Reinstall {
+		t.Error("frozen plugin was not reinstalled")
+	}
+	if request.Update {
+		t.Error("reinstall set the update flag")
+	}
+}
+
+func TestBuildRecordsFrozenPlugins(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {GitHub: "romkatv/zsh-defer", Frozen: true},
+	}}
+	locked, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir()}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || !locked.Plugins[0].Frozen {
+		t.Fatalf("locked plugins = %+v, want the frozen flag recorded", locked.Plugins)
+	}
+}
+
 func TestPluginETagsExtractsRemoteValidators(t *testing.T) {
 	locked := LockedConfig{Plugins: []LockedPlugin{
 		{Name: "remote", ETag: `"v1"`},

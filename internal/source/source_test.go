@@ -762,6 +762,70 @@ func TestInstallerFetchesPinnedRevisionOutsideShallowHistory(t *testing.T) {
 	}
 }
 
+func TestInstallerFrozenUpdateSkipsFetch(t *testing.T) {
+	// A frozen update must not reach the remote: with the source gone it still
+	// succeeds untouched, while an unfrozen update fails on the fetch.
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	sourceURL := "file://" + repository
+	if installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL}); err != nil {
+		t.Fatal(err)
+	} else if installed.Revision != first {
+		t.Fatalf("revision = %q, want the initial tip %q", installed.Revision, first)
+	}
+	if err := os.Rename(repository, repository+"-hidden"); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Update: true, Frozen: true})
+	if err != nil {
+		t.Fatalf("frozen update reached the missing remote: %v", err)
+	}
+	if installed.Revision != first {
+		t.Fatalf("frozen update moved the revision to %q, want %q", installed.Revision, first)
+	}
+	if _, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Update: true}); err == nil {
+		t.Fatal("unfrozen update succeeded against the missing remote; the fetch must run")
+	}
+}
+
+func TestInstallerFrozenRemoteSkipsConditionalGet(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		writer.Header().Set("ETag", `"573a1e10"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+	}))
+	defer server.Close()
+
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	installed, err := installer.Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugin.zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1 for the initial download", requests)
+	}
+	installed, err = installer.Install(context.Background(), Request{Name: "remote", Remote: server.URL + "/plugin.zsh", Update: true, Frozen: true, ETag: installed.ETag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want the frozen update to skip even the conditional GET", requests)
+	}
+	contents, err := os.ReadFile(installed.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo remote\n" {
+		t.Fatalf("installed file = %q, want the untouched download", contents)
+	}
+}
+
 // commitFile commits contents to a file in the repository directory and returns the revision, seeding the git repository on first use.
 func commitFile(t *testing.T, directory, file, contents string) string {
 	t.Helper()

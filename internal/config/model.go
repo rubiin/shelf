@@ -32,6 +32,8 @@ type RawPlugin struct {
 	Build     []string          `toml:"build"`
 	Profiles  []string          `toml:"profiles"`
 	Hooks     map[string]string `toml:"hooks"`
+	// Frozen pins the installed version: update leaves it alone unless forced or reinstalled.
+	Frozen bool `toml:"frozen"`
 	// CloneOpts are extra arguments passed to git clone for git, github, and gist sources.
 	CloneOpts []string `toml:"cloneopts"`
 	// Depth sets the git clone depth; nil keeps the shallow depth-1 default, 0 clones full history.

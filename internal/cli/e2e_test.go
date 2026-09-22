@@ -1761,6 +1761,27 @@ func TestAddWritesBuildCommands(t *testing.T) {
 	}
 }
 
+func TestAddWritesFrozenField(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"add", "demo", "--local", filepath.Join(directory, "plugin"), "--frozen"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "frozen = true") {
+		t.Fatalf("config = %s, want the frozen key", contents)
+	}
+}
+
 func TestBuildHookGeneratesTheSourcedFile(t *testing.T) {
 	directory := t.TempDir()
 	pluginDirectory := filepath.Join(directory, "plugin")
@@ -1898,6 +1919,105 @@ func TestRemoteUpdateUsesConditionalGet(t *testing.T) {
 	}
 	if bodyWrites != 1 {
 		t.Fatalf("body writes = %d, want 1; the 304 must skip re-download", bodyWrites)
+	}
+}
+
+func TestLockRecordsFrozenPlugin(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repo")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCommit(t, repository, "plugin.zsh", "echo frozen\n")
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\ngit = \"" + repository + "\"\nfrozen = true\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := lock.Read(filepath.Join(directory, "data", "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || !locked.Plugins[0].Frozen {
+		t.Fatalf("locked plugins = %+v, want the frozen flag recorded", locked.Plugins)
+	}
+}
+
+func TestUpdateMarksFrozenPlugins(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repo")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rev := gitCommit(t, repository, "plugin.zsh", "echo frozen\n")
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\ngit = \"" + repository + "\"\nfrozen = true\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	if err := Execute([]string{"update"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("update: %v (stderr %q)", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Frozen "+repository) {
+		t.Fatalf("update stderr = %q, want a Frozen status for the pinned plugin", stderr.String())
+	}
+	// --force refreshes frozen plugins, so it must not report them as Frozen.
+	stderr.Reset()
+	if err := Execute([]string{"update", "--force"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("update --force: %v (stderr %q)", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Frozen ") {
+		t.Fatalf("update --force stderr = %q, want no Frozen status", stderr.String())
+	}
+	// lock --update shares the Frozen marking.
+	stderr.Reset()
+	if err := Execute([]string{"lock", "--update"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("lock --update: %v (stderr %q)", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Frozen "+repository) {
+		t.Fatalf("lock --update stderr = %q, want a Frozen status", stderr.String())
+	}
+	// The frozen plugin stays pinned to its original revision.
+	locked, err := lock.Read(filepath.Join(directory, "data", "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || locked.Plugins[0].Rev != rev {
+		t.Fatalf("locked plugins = %+v, want the original revision %q preserved", locked.Plugins, rev)
+	}
+}
+
+func TestForceRequiresUpdateOrReinstall(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	for _, command := range [][]string{{"lock", "--force"}, {"source", "--force"}} {
+		var stderr bytes.Buffer
+		err := Execute(command, &bytes.Buffer{}, &stderr)
+		if err == nil {
+			t.Fatalf("%v succeeded; want a --force validation error", command)
+		}
+		if !strings.Contains(err.Error(), "--force requires --update or --reinstall") {
+			t.Fatalf("%v error = %v, want the --force validation error", command, err)
+		}
 	}
 }
 

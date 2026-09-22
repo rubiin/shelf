@@ -45,7 +45,7 @@ func TestRootCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"dir", "file", "proto", "apply", "profiles", "hooks"} {
+	for _, name := range []string{"dir", "file", "proto", "apply", "profiles", "hooks", "frozen"} {
 		if add.Flags().Lookup(name) == nil {
 			t.Errorf("add flag %q is missing", name)
 		}
