@@ -299,7 +299,7 @@ func TestLockUsesAProfileSpecificLockFile(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	config := "shell = \"zsh\"\n\n[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -332,7 +332,7 @@ func TestProfileExcludesPluginsWithoutASelectedProfile(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestLockWarnsForUnmatchedProfile(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -387,7 +387,7 @@ func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	config := "shell = \"zsh\"\n\nplugins.fzf.inline = \"echo fzf\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -417,7 +417,7 @@ func TestAddWritesProtoField(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +443,7 @@ func TestAddWritesGitLabField(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +498,7 @@ func TestAddRejectsCloneOptionsOnInlinePlugin(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -829,7 +829,7 @@ func TestCleanKeepsOwnedSourcesAndPrunesTheRest(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	config := "shell = \"zsh\"\n\n[plugins.kept]\ngithub = \"rubiin/kept\"\n\n[plugins.inline]\ninline = \"echo inline\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -1130,7 +1130,7 @@ func TestLockReportsSkippedPlugins(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n[plugins.work]\nprofiles = [\"work\"]\ngithub = \"rubiin/work\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -1157,7 +1157,7 @@ func TestSourceReportsUnlockedAndRenderedWhenVerbose(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1181,7 +1181,7 @@ func TestSourceReportsUnlockedAndRenderedWhenVerbose(t *testing.T) {
 
 func TestFailuresPrintAnErrorLineOnce(t *testing.T) {
 	directory := t.TempDir()
-	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "absent", "plugins.toml"))
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "absent", "config.toml"))
 	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(directory, "absent"))
 	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
 
@@ -1268,7 +1268,7 @@ func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	contents := []byte("shell = zsh\n\n[plugins.demo\ninline = \"echo demo\"\n")
 	if err := os.WriteFile(configFile, contents, 0o600); err != nil {
 		t.Fatal(err)
@@ -1304,7 +1304,7 @@ func TestSourceRelocksWhenTheShellOverrideChanges(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte("[plugins.demo]\ninline = \"echo demo\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -173,7 +173,7 @@ func TestAcquireTreatsVanishedDirectoryAsMissing(t *testing.T) {
 
 func TestAcquireRejectsRegularFile(t *testing.T) {
 	directory := t.TempDir()
-	path := filepath.Join(directory, "plugins.toml")
+	path := filepath.Join(directory, "config.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\""), 0o600); err != nil {
 		t.Fatal(err)
 	}

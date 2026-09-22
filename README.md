@@ -112,7 +112,7 @@ eval "$(shelf source)"
 ```
 
 Add the `eval` command to `.bashrc` or `.zshrc`. Re-run `shelf lock` after
-changing `plugins.toml`; keep `shelf source` for your shell startup file. It
+changing `config.toml`; keep `shelf source` for your shell startup file. It
 prints shell code to stdout and diagnostics to stderr.
 
 ## Build and test
@@ -195,7 +195,7 @@ Their environment equivalents use the
 ```sh
 SHELF_CONFIG_DIR="$HOME/.config/shelf"
 SHELF_DATA_DIR="$HOME/.local/share/shelf"
-SHELF_CONFIG_FILE="$HOME/.config/shelf/plugins.toml"
+SHELF_CONFIG_FILE="$HOME/.config/shelf/config.toml"
 SHELF_PROFILE="work"
 SHELF_SHELL="zsh"
 SHELF_EDITOR="nvim --wait"
@@ -204,7 +204,7 @@ SHELF_EDITOR="nvim --wait"
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` still control base directories when
 explicit shelf directory flags are absent.
 
-The configuration file is `plugins.toml`. Without `--config-dir`, its
+The configuration file is `config.toml`. Without `--config-dir`, its
 directory is `--config-file`'s parent. `shelf edit` uses `SHELF_EDITOR`, then
 `VISUAL`, then `EDITOR`, splitting the value with shell-word rules so quoted
 paths survive. `SHELF_SHELL` accepts only `bash` or `zsh`; any other value is
@@ -212,7 +212,7 @@ an error rather than a silent fallback.
 
 ## Configuration
 
-`plugins.toml` has one top-level configuration and one source per plugin. Set
+`config.toml` has one top-level configuration and one source per plugin. Set
 `shell = "zsh"` or `shell = "bash"`; omit it to use the default Zsh shell.
 
 Each plugin must set exactly one of `github`, `gist`, `gitlab`, `bitbucket`,
@@ -367,7 +367,7 @@ $XDG_CONFIG_HOME/shelf/plugins.<profile>.lock
 ```
 
 It holds only Git-based plugin names and resolved revisions, so commit it with
-`plugins.toml` for reproducible versions. When present, `shelf lock`,
+`config.toml` for reproducible versions. When present, `shelf lock`,
 `shelf lock --reinstall`, and `shelf source --relock` use its revisions;
 `shelf lock --update` and `shelf update --lock` fetch current ones and refresh
 the manifest. Local, remote, and inline plugins are intentionally omitted.
@@ -416,5 +416,5 @@ SHELF_PROFILE=work shelf source
 Use a temporary configuration:
 
 ```sh
-shelf --config-file /tmp/plugins.toml source
+shelf --config-file /tmp/config.toml source
 ```

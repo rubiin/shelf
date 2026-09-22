@@ -12,7 +12,7 @@ type Paths struct {
 	ConfigFile      string
 }
 
-// ResolvePaths resolves the config paths: the config file is plugins.toml, and a config file without a directory puts the config directory at its parent.
+// ResolvePaths resolves the config paths: the config file is config.toml, and a config file without a directory puts the config directory at its parent.
 func ResolvePaths(home, configDirectory, dataDirectory, configFile string) (Paths, error) {
 	if home == "" {
 		return Paths{}, errors.New("home directory is empty")
@@ -25,7 +25,7 @@ func ResolvePaths(home, configDirectory, dataDirectory, configFile string) (Path
 		}
 	}
 	if configFile == "" {
-		configFile = filepath.Join(configDirectory, "plugins.toml")
+		configFile = filepath.Join(configDirectory, "config.toml")
 	}
 	if dataDirectory == "" {
 		dataDirectory = filepath.Join(xdgBase("XDG_DATA_HOME", home, ".local", "share"), "shelf")

@@ -38,7 +38,7 @@ func BenchmarkTmpSourceCommand(b *testing.B) {
 		config += fmt.Sprintf("[plugins.p%d]\nlocal = \"%s\"\nuse = [\"p%d.*.zsh\", \"p%d.*.sh\"]\n\n", index, p, index, index)
 		plugged.Plugins = append(plugged.Plugins, lock.LockedPlugin{Name: fmt.Sprintf("p%d", index), Directory: p, Files: files, Apply: []string{"source"}})
 	}
-	configFile := filepath.Join(configDir, "plugins.toml")
+	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
 		b.Fatal(err)
 	}

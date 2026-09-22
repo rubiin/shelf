@@ -79,7 +79,7 @@ for index in $(seq 1 "$local_plugins"); do
     done
 done
 
-config="$work/plugins.toml"
+config="$work/config.toml"
 {
     echo 'shell = "zsh"'
     echo
@@ -97,7 +97,7 @@ config="$work/plugins.toml"
     done
 } > "$config"
 cp "$config" "$XDG_CONFIG_HOME/sheldon/plugins.toml"
-cp "$config" "$XDG_CONFIG_HOME/shelf/plugins.toml"
+cp "$config" "$XDG_CONFIG_HOME/shelf/config.toml"
 
 # Always benchmark the freshly built binary so the comparison never uses a
 # stale build; --shelf only picks where that build is written.

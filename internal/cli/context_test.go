@@ -19,7 +19,7 @@ func TestResolvePathsUsesXDGDefaults(t *testing.T) {
 	if paths.DataDirectory != filepath.Join(home, ".local", "share", "shelf") {
 		t.Fatalf("data directory = %q", paths.DataDirectory)
 	}
-	if paths.ConfigFile != filepath.Join(paths.ConfigDirectory, "plugins.toml") {
+	if paths.ConfigFile != filepath.Join(paths.ConfigDirectory, "config.toml") {
 		t.Fatalf("config file = %q", paths.ConfigFile)
 	}
 	if paths.LockFile("") != filepath.Join(paths.DataDirectory, "plugins.lock") {
@@ -55,7 +55,7 @@ func TestResolvePathsHonorsExplicitOverrides(t *testing.T) {
 }
 
 func TestLockFileCarriesTheProfileName(t *testing.T) {
-	paths := Paths{ConfigDirectory: "/tmp/config", DataDirectory: "/tmp/data", ConfigFile: "/tmp/config/plugins.toml"}
+	paths := Paths{ConfigDirectory: "/tmp/config", DataDirectory: "/tmp/data", ConfigFile: "/tmp/config/config.toml"}
 	if got := paths.LockFile(""); got != filepath.Join("/tmp/data", "plugins.lock") {
 		t.Fatalf("lock file = %q", got)
 	}

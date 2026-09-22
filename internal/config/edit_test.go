@@ -144,7 +144,7 @@ func TestAddRefusesToWriteConfigItCannotReload(t *testing.T) {
 }
 
 func TestAddWritesProtoRatherThanProtocol(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestAddWritesProtoRatherThanProtocol(t *testing.T) {
 }
 
 func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestAddWritesCloneOptionsAndDepth(t *testing.T) {
 }
 
 func TestAddWritesMultiForgeFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestAddWritesMultiForgeFields(t *testing.T) {
 }
 
 func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"zsh\"\n\nplugins.fzf.inline = \"echo fzf\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestRemoveDeletesDottedKeyPlugin(t *testing.T) {
 }
 
 func TestRemoveDeletesQuotedPluginName(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"zsh\"\n\n[plugins.\"my.plugin\"]\ninline = \"echo mine\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestRemoveDeletesQuotedPluginName(t *testing.T) {
 
 func TestRemoveLeavesDottedKeysThatBelongToAnotherTable(t *testing.T) {
 	// A dotted key after a table header belongs to that table, so it is not a top-level plugin.
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"zsh\"\n\n[plugins.owner]\ninline = \"echo owner\"\nplugins.guest.inline = \"echo guest\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ func TestRemoveLeavesDottedKeysThatBelongToAnotherTable(t *testing.T) {
 
 func TestRemoveDeletesMultiLineDottedKeyValue(t *testing.T) {
 	// A dotted-key value split across lines must be dropped whole, not left as orphaned lines.
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"zsh\"\n\nplugins.foo.apply = [\n  \"a\",\n  \"b\",\n]\nplugins.foo.inline = \"echo foo\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -285,7 +285,7 @@ func TestRemoveDeletesMultiLineDottedKeyValue(t *testing.T) {
 
 func TestRemoveIgnoresBracketsInsideQuotedValues(t *testing.T) {
 	// Array elements containing "[" and "]" must not close the multi-line value early.
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"zsh\"\n\nplugins.foo.use = [\n  \"a]b[\",\n  \"c\",\n]\n\n[plugins.kept]\ninline = \"echo kept\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestRemoveIgnoresBracketsInsideQuotedValues(t *testing.T) {
 func TestRemoveRefusesToWriteACorruptConfig(t *testing.T) {
 	// A multi-line value the line scanner cannot track (here a """ string) must fail the
 	// round-trip validation instead of silently writing orphaned lines to disk.
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	original := "shell = \"zsh\"\n\nplugins.gone.inline = \"\"\"\necho first\necho second\"\"\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -326,7 +326,7 @@ func TestRemoveRefusesToWriteACorruptConfig(t *testing.T) {
 }
 
 func TestRemoveKeepsFileMode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "plugins.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n\n[plugins.gone]\ninline = \"echo gone\"\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
