@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -24,13 +25,19 @@ func Initialize(path string, shell Shell) error {
 	if shell != Bash && shell != Zsh {
 		return errors.New("unsupported shell: " + string(shell))
 	}
-	if _, err := os.Stat(path); err == nil {
+	info, err := os.Stat(path)
+	switch {
+	case err == nil && info.IsDir():
+		return fmt.Errorf("config path %q is a directory", path)
+	case err == nil:
+		// Existing file: already initialized, leave it untouched.
 		return nil
-	} else if !os.IsNotExist(err) {
+	case !os.IsNotExist(err):
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(DefaultConfig(shell)), 0o600)
+	// Write via temp file + rename so a partial write never lands at path.
+	return writeAtomically(path, []byte(DefaultConfig(shell)))
 }

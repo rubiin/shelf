@@ -380,3 +380,93 @@ func TestAddAndRemovePreserveUnrelatedTOML(t *testing.T) {
 		t.Fatalf("remove changed wrong content: %s", contents)
 	}
 }
+
+func TestRemoveDeletesInlineTablePlugin(t *testing.T) {
+	// [plugins] entry declared as an inline table must be removable, and the
+	// surrounding comments and sibling plugins must survive.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "shell = \"zsh\"\n\n[plugins]\n# keep this comment\ndemo = { github = \"rubiin/demo\", use = [\"*.zsh\"] }\nkept = { github = \"rubiin/kept\" }\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "demo") {
+		t.Fatalf("inline-table plugin survived remove: %s", contents)
+	}
+	if !strings.Contains(string(contents), "kept = { github = \"rubiin/kept\" }") || !strings.Contains(string(contents), "# keep this comment") {
+		t.Fatalf("remove lost unrelated content: %s", contents)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("removed config no longer decodes: %v\n%s", err, contents)
+	}
+}
+
+func TestRemoveDeletesQuotedInlineTablePlugin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "shell = \"zsh\"\n\n[plugins]\n\"my.demo\" = { github = \"rubiin/demo\" }\nkept = { github = \"rubiin/kept\" }\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "my.demo"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "my.demo") {
+		t.Fatalf("quoted inline-table plugin survived remove: %s", contents)
+	}
+	if !strings.Contains(string(contents), "kept = { github = \"rubiin/kept\" }") {
+		t.Fatalf("remove lost the unrelated inline-table plugin: %s", contents)
+	}
+}
+
+func TestRemoveIgnoresTrailingCommentsOnTableHeaders(t *testing.T) {
+	// A trailing comment on a table header must not hide the plugin from remove.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "shell = \"zsh\"\n\n# a leading comment\n[plugins.gone] # remove this plugin\ninline = \"echo gone\"\n\n[plugins.kept] # keep this one\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "plugins.gone") {
+		t.Fatalf("commented header plugin survived remove: %s", contents)
+	}
+	if !strings.Contains(string(contents), "[plugins.kept] # keep this one") || !strings.Contains(string(contents), "# a leading comment") {
+		t.Fatalf("remove lost comments or the unrelated plugin: %s", contents)
+	}
+}
+
+func TestRemoveRefusesToEditAnUnparsableConfig(t *testing.T) {
+	// An unmatched [ in a multi-line value must not make remove drop the table
+	// header that follows it (and the rest of the config): an unparsable config
+	// is refused and left untouched.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "shell = \"zsh\"\n\nplugins.gone.apply = [\n  \"a\",\n  \"b\",\n\n# comment\n[plugins.kept]\ninline = \"echo kept\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "gone"); err == nil {
+		t.Fatal("remove edited a config it cannot parse")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != original {
+		t.Fatalf("failed remove changed the config: %s", contents)
+	}
+}

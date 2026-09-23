@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,7 +61,7 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 		tasks = append(tasks, task{name: name, plugin: plugin})
 	}
 	plugins := make([]LockedPlugin, len(tasks))
-	err := RunConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
+	err := RunConcurrently(context.Background(), len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin, err := buildPlugin(installContext, ctx, cfg, installer, mode, tasks[index].name, tasks[index].plugin)
 		if err != nil {
 			return err
@@ -81,7 +82,8 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 }
 
 // RunConcurrently runs work per index with at most concurrency workers, stopping on the first error.
-func RunConcurrently(count, concurrency int, work func(ctx context.Context, index int) error) error {
+// The ctx is passed to every work call; its cancellation or deadline bounds the whole run.
+func RunConcurrently(ctx context.Context, count, concurrency int, work func(ctx context.Context, index int) error) error {
 	if concurrency < 1 {
 		return fmt.Errorf("concurrency must be at least 1")
 	}
@@ -89,9 +91,9 @@ func RunConcurrently(count, concurrency int, work func(ctx context.Context, inde
 		return nil
 	}
 	if count == 1 {
-		return work(context.Background(), 0)
+		return work(ctx, 0)
 	}
-	installContext, cancel := context.WithCancel(context.Background())
+	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	jobs := make(chan int, min(concurrency, count))
 	var waitGroup sync.WaitGroup
@@ -103,13 +105,13 @@ func RunConcurrently(count, concurrency int, work func(ctx context.Context, inde
 			defer waitGroup.Done()
 			for {
 				select {
-				case <-installContext.Done():
+				case <-runContext.Done():
 					return
 				case index, open := <-jobs:
 					if !open {
 						return
 					}
-					if err := work(installContext, index); err != nil {
+					if err := work(runContext, index); err != nil {
 						once.Do(func() {
 							firstErr = err
 							cancel()
@@ -123,7 +125,7 @@ func RunConcurrently(count, concurrency int, work func(ctx context.Context, inde
 dispatch:
 	for index := range count {
 		select {
-		case <-installContext.Done():
+		case <-runContext.Done():
 			break dispatch
 		case jobs <- index:
 		}
@@ -235,7 +237,7 @@ func Restore(locked LockedConfig, installer source.Installer, concurrency int) e
 		}
 		tasks = append(tasks, plugin)
 	}
-	return RunConcurrently(len(tasks), concurrency, func(installContext context.Context, index int) error {
+	return RunConcurrently(context.Background(), len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin := tasks[index]
 		if _, err := installer.Install(installContext, source.Request{Name: plugin.Name, Git: plugin.URL, Ref: plugin.Rev, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}); err != nil {
 			return fmt.Errorf("restore plugin %q revision %q: %w", plugin.Name, plugin.Rev, err)
@@ -360,7 +362,8 @@ func isRevisionSource(value string) bool {
 	return false
 }
 
-// Write encodes to a temp file and renames atomically, so a crash can't truncate the lock.
+// Write encodes to a temp file and renames it atomically, syncing both the file
+// and the directory so a crash can't truncate the lock or lose the rename.
 func Write(path string, locked LockedConfig) error {
 	return writeTOML(path, locked)
 }
@@ -384,10 +387,29 @@ func writeTOML(path string, value any) error {
 		_ = temporary.Close()
 		return err
 	}
+	// Flush the temp contents to disk before the rename, so a crash right after
+	// the rename can't leave a zero-length or partial lock in place.
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync lock file %q: %w", path, err)
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryName, path)
+	if err := os.Rename(temporaryName, path); err != nil {
+		return err
+	}
+	// Sync the containing directory so the rename itself is durable, not just
+	// the replacement file.
+	handle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open lock directory %q: %w", directory, err)
+	}
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close()
+		return fmt.Errorf("sync lock directory %q: %w", directory, err)
+	}
+	return handle.Close()
 }
 
 // Read decodes a lock file, using the schema-specific reader when it matches.
@@ -421,6 +443,13 @@ func VerifyLocked(locked LockedConfig, ctx Context) bool {
 	if len(locked.Templates) == 0 {
 		return false
 	}
+	// Rendering replays the lock's templates, so a shelf upgrade that changes
+	// them must invalidate the lock even when the config fingerprint matches.
+	// Only contexts that resolved current templates gate on them; callers that
+	// don't render (status, doctor) skip the comparison.
+	if ctx.Templates != nil && !maps.Equal(locked.Templates, ctx.Templates) {
+		return false
+	}
 	if locked.Profile != ctx.Profile || locked.Shell != ctx.Shell || locked.ConfigFingerprint != ctx.fingerprint() {
 		return false
 	}
@@ -450,7 +479,7 @@ func selectedFilesExist(locked LockedConfig) bool {
 	for _, plugin := range locked.Plugins {
 		files = append(files, plugin.Files...)
 	}
-	missing := RunConcurrently(total, verifyConcurrency, func(_ context.Context, index int) error {
+	missing := RunConcurrently(context.Background(), total, verifyConcurrency, func(_ context.Context, index int) error {
 		if exists(files[index]) {
 			return nil
 		}

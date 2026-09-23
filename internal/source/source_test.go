@@ -375,6 +375,18 @@ func TestRemoteDirectoryLayout(t *testing.T) {
 	}
 }
 
+func TestRemoteDirectoryRejectsPathEscape(t *testing.T) {
+	dataDir := t.TempDir()
+	for _, url := range []string{
+		"https://example.com/a/../../../x",
+		"https://example.com/../../etc/passwd",
+	} {
+		if _, _, err := RemoteDirectory(dataDir, url); err == nil {
+			t.Fatalf("remote URL %q escaped the download directory", url)
+		}
+	}
+}
+
 func TestInstallerClonesIntoTheSourceLayout(t *testing.T) {
 	repository := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repository, "plugin.zsh"), []byte("echo test\n"), 0o600); err != nil {
@@ -899,5 +911,101 @@ func TestGitURLProtocolPrefixes(t *testing.T) {
 				t.Fatalf("git URL = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// TestInstallGitPropagatesCloneStateErrors verifies a .git stat failure other than
+// "not exists" (here ENOTDIR because the destination is a file) is reported instead
+// of being mistaken for a fresh clone.
+func TestInstallGitPropagatesCloneStateErrors(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	directory := filepath.Join(CloneDir(dataDir), "example.com", "owner", "repo")
+	if err := os.MkdirAll(filepath.Dir(directory), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(directory, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := installGit(context.Background(), directory, Request{Git: "https://example.com/owner/repo"})
+	if err == nil || !strings.Contains(err.Error(), "check existing clone") {
+		t.Fatalf("error = %v, want the .git stat error to propagate", err)
+	}
+}
+
+// TestGitDirectoryRejectsEscapingURLPaths verifies ".." segments in a git source URL
+// cannot merge the clone destination outside the clone directory.
+func TestGitDirectoryRejectsEscapingURLPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "multiple up segments", raw: "https://example.com/a/../../../../x"},
+		{name: "leading up segments", raw: "https://example.com/../../../x"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := GitDirectory(t.TempDir(), Request{Git: test.raw})
+			if err == nil || !strings.Contains(err.Error(), "escapes") {
+				t.Fatalf("GitDirectory(%q) error = %v, want an escape rejection", test.raw, err)
+			}
+		})
+	}
+}
+
+// TestInstallerRejectsMissingLocalSubdirectory verifies a local source whose dir does
+// not exist fails at install time with a clear error instead of at selection/render.
+func TestInstallerRejectsMissingLocalSubdirectory(t *testing.T) {
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	_, err := installer.Install(context.Background(), Request{Name: "demo", Local: t.TempDir(), Dir: filepath.Join("plugins", "sudo")})
+	if err == nil || !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("error = %v, want a missing subdirectory error", err)
+	}
+}
+
+// TestInstallerRejectsLocalSubdirectoryFile verifies a local source whose dir exists
+// as a regular file is rejected at install time.
+func TestInstallerRejectsLocalSubdirectoryFile(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "plugins"), []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "demo", Local: parent, Dir: "plugins"})
+	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error = %v, want a not-a-directory error", err)
+	}
+}
+
+// TestInstallerRejectsEmptyRemoteBody verifies a 200 with an empty body errors out and
+// keeps the previously installed file instead of clobbering it with zero bytes.
+func TestInstallerRejectsEmptyRemoteBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installer := NewInstaller(dataDir)
+	url := server.URL + "/plugin.zsh"
+	_, file, err := RemoteDirectory(dataDir, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("echo working\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = installer.Install(context.Background(), Request{Name: "remote", Remote: url})
+	if err == nil || !strings.Contains(err.Error(), "empty body") {
+		t.Fatalf("error = %v, want an empty-body rejection", err)
+	}
+	contents, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "echo working\n" {
+		t.Fatalf("installed file = %q, want the untouched previous download", contents)
 	}
 }

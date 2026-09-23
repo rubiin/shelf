@@ -1,11 +1,12 @@
 package render
 
-// sourceTemplate is the default: hooks around a source per file.
-const sourceTemplate = "{{ hooks?.pre | nl }}{% for file in files %}source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
+// sourceTemplate is the default: hooks around a source per file. The dquote filter escapes
+// $, `, \, and " inside the path so a filename with those characters sources the exact file.
+const sourceTemplate = "{{ hooks?.pre | nl }}{% for file in files %}source \"{{ file | dquote }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 
 // deferTemplate is the zsh-only defer template: sources queue into the scheduler in
 // shelfDeferPreamble while hooks still run immediately.
-const deferTemplate = "{{ hooks?.pre | nl }}{% for file in files %}_shelf_defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
+const deferTemplate = "{{ hooks?.pre | nl }}{% for file in files %}_shelf_defer source \"{{ file | dquote }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 
 // shelfDeferPreamble is the scheduler deferTemplate queues into: sources run when zle first goes
 // idle, after the first prompt. The fd must be top-level (a local fd closes when the precmd hook
@@ -44,7 +45,7 @@ const shelfDeferPreamble = `(( ${+functions[_shelf_defer_setup]} )) || {
 // zcompileTemplate is zsh-only: the guard refreshes the .zwc before sourcing (zsh's -ot is false
 // when its first operand is missing, so a first compile is covered), and source then auto-loads
 // the newer .zwc.
-const zcompileTemplate = "{{ hooks?.pre | nl }}{% for file in files %}[[ ! -e \"{{ file }}.zwc\" || \"{{ file }}.zwc\" -ot \"{{ file }}\" ]] && zcompile \"{{ file }}\"\nsource \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
+const zcompileTemplate = "{{ hooks?.pre | nl }}{% for file in files %}[[ ! -e \"{{ file | dquote }}.zwc\" || \"{{ file | dquote }}.zwc\" -ot \"{{ file | dquote }}\" ]] && zcompile \"{{ file | dquote }}\"\nsource \"{{ file | dquote }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 
 // BuiltinTemplates returns the default templates. path and fpath are zsh-only; under bash
 // zcompile and defer degrade to plain source, so one apply list works in both shells.

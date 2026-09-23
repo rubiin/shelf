@@ -329,3 +329,92 @@ func TestSelectFilesRejectsInvalidIgnorePattern(t *testing.T) {
 		t.Fatal("invalid ignore pattern was accepted")
 	}
 }
+
+func TestSelectFilesEscapesPluginNameMetacharacters(t *testing.T) {
+	// A plugin name is spliced into every pattern, so its metacharacters must
+	// select the name literally instead of widening the glob.
+	tests := []struct {
+		name  string
+		file  string
+		decoy string // matches only if the name's metacharacters act as glob syntax
+	}{
+		{name: "star*star", file: "star*star.plugin.zsh", decoy: "starABstar.plugin.zsh"},
+		{name: "q?mark", file: "q?mark.plugin.zsh", decoy: "qxmark.plugin.zsh"},
+		{name: "b[cd]", file: "b[cd].plugin.zsh", decoy: "bd.plugin.zsh"},
+		{name: "bra{ce}", file: "bra{ce}.plugin.zsh", decoy: "brace.plugin.zsh"},
+		{name: `slash\name`, file: `slash\name.plugin.zsh`, decoy: `slashxname.plugin.zsh`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			if err := os.WriteFile(filepath.Join(directory, test.file), []byte("echo test\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, test.decoy), []byte("echo decoy\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := selectFiles(directory, test.name, "zsh", []string{"{{ name }}.plugin.zsh"}, false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(directory, test.file)
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("selected %v, want only the literal name %s", got, want)
+			}
+		})
+	}
+}
+
+func TestCollectFilesFollowsSymlinkedRoot(t *testing.T) {
+	// A stow-style local source is a symlink to the packaged plugin; the walk
+	// must descend into the target directory instead of reporting the link as
+	// a lone "file".
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "demo.plugin.zsh"), []byte("echo test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "plugin")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := collectFiles(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != "demo.plugin.zsh" {
+		t.Fatalf("files = %v, want [demo.plugin.zsh]", files)
+	}
+
+	got, err := selectFiles(link, "demo", "zsh", []string{"*.plugin.zsh"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(target, "demo.plugin.zsh")
+	// Join against the original symlink path; it resolves to the same target.
+	if len(got) != 1 {
+		t.Fatalf("selected %v, want the symlinked file", got)
+	}
+	resolved, err := filepath.EvalSymlinks(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != want {
+		t.Fatalf("selected %s, want %s", got[0], want)
+	}
+}
+
+func TestSelectFilesValidatesEveryPattern(t *testing.T) {
+	// Validation must not stop at the first selecting pattern: an invalid glob
+	// later in the list is a config error even when first-match already found
+	// files.
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "demo.plugin.zsh"), []byte("echo test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := selectFiles(directory, "demo", "zsh", []string{"demo.plugin.zsh", "[unclosed"}, true, nil); err == nil {
+		t.Fatal("an invalid pattern after a first-match selection was accepted")
+	}
+}

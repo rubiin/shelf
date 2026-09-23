@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -32,6 +34,14 @@ func decode(contents []byte) (Config, error) {
 	metadata, err := toml.Decode(string(contents), &cfg)
 	if err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+	if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, key := range undecoded {
+			keys = append(keys, key.String())
+		}
+		sort.Strings(keys)
+		return Config{}, fmt.Errorf("decode config: unknown keys: %s", strings.Join(keys, ", "))
 	}
 	if cfg.Plugins == nil {
 		cfg.Plugins = map[string]RawPlugin{}

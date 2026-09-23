@@ -47,18 +47,25 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 	if err != nil {
 		return nil, err
 	}
-	var matched []string
-	for _, pattern := range patterns {
-		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
+	// A name is text, not glob syntax: escape its metacharacters so a quoted
+	// plugin name can't widen the selection it matches.
+	escapedName := escapeGlob(name)
+	rendered := make([]string, len(patterns))
+	for index, pattern := range patterns {
+		rendered[index] = strings.ReplaceAll(pattern, "{{ name }}", escapedName)
 		// Clean like the walk output so `./*.zsh` still matches relative paths.
-		rendered = path.Clean(rendered)
-		// Validate up front so a typo fails even with no candidates.
-		if !doublestar.ValidatePattern(rendered) {
+		rendered[index] = path.Clean(rendered[index])
+		// Validate every pattern before selection so a typo fails even when an
+		// earlier first-match pattern already selects files.
+		if !doublestar.ValidatePattern(rendered[index]) {
 			return nil, fmt.Errorf("invalid pattern: %s", pattern)
 		}
+	}
+	var matched []string
+	for _, pattern := range rendered {
 		selected := 0
 		for _, candidate := range candidates {
-			ok, err := doublestar.Match(rendered, candidate)
+			ok, err := doublestar.Match(pattern, candidate)
 			if err != nil {
 				return nil, err
 			}
@@ -99,8 +106,9 @@ func dropIgnored(matched []string, name string, ignored []string) ([]string, err
 		return matched, nil
 	}
 	patterns := make([]string, len(ignored))
+	escapedName := escapeGlob(name)
 	for index, pattern := range ignored {
-		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
+		rendered := strings.ReplaceAll(pattern, "{{ name }}", escapedName)
 		rendered = path.Clean(rendered)
 		if !doublestar.ValidatePattern(rendered) {
 			return nil, fmt.Errorf("invalid ignore pattern: %s", pattern)
@@ -136,8 +144,14 @@ func collectFiles(directory string) ([]string, error) {
 		}
 		return nil, err
 	}
+	// Resolve the root so a symlinked plugin directory (stow-style local sources)
+	// is walked as the directory it points to, not as a single "file".
+	resolved, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return nil, err
+	}
 	var files []string
-	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(resolved, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -148,7 +162,7 @@ func collectFiles(directory string) ([]string, error) {
 			}
 			return nil
 		}
-		relative, err := filepath.Rel(directory, path)
+		relative, err := filepath.Rel(resolved, path)
 		if err != nil {
 			return err
 		}
@@ -159,4 +173,19 @@ func collectFiles(directory string) ([]string, error) {
 		return nil, err
 	}
 	return files, nil
+}
+
+// escapeGlob backslash-escapes the characters doublestar treats as metacharacters,
+// so a plugin name in a pattern is matched literally.
+func escapeGlob(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, character := range value {
+		switch character {
+		case '\\', '*', '?', '[', ']', '{', '}':
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(character)
+	}
+	return builder.String()
 }

@@ -146,6 +146,23 @@ func TestFastReadHandlesEveryWrittenLock(t *testing.T) {
 				ETag:      `"573a1e10"`,
 			}},
 		},
+		"clone options depth frozen and ignore": {
+			Shell: "zsh",
+			Plugins: []LockedPlugin{{
+				Name:      "full",
+				CloneOpts: []string{"--single-branch"},
+				Depth:     func() *int { depth := 1; return &depth }(),
+				Frozen:    true,
+				Ignore:    []string{"**/test*", "{{ name }}.extra.zsh"},
+			}},
+		},
+		"depth of zero": {
+			Shell: "zsh",
+			Plugins: []LockedPlugin{{
+				Name:  "shallow",
+				Depth: func() *int { depth := 0; return &depth }(),
+			}},
+		},
 	}
 	for name, locked := range cases {
 		t.Run(name, func(t *testing.T) {

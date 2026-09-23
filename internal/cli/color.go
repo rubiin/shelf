@@ -126,11 +126,14 @@ type lineWriter struct {
 }
 
 func (w lineWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	if !w.on {
 		return w.dst.Write(p)
 	}
 	text := w.style + strings.ReplaceAll(string(p), "\n", ansiReset+"\n"+w.style)
-	if len(p) > 0 && p[len(p)-1] != '\n' {
+	if !strings.HasSuffix(text, ansiReset) {
 		text += ansiReset
 	}
 	if _, err := io.WriteString(w.dst, text); err != nil {

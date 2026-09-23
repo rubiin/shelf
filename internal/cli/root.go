@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/term"
@@ -147,6 +148,9 @@ func NewRoot() *cobra.Command {
 			}
 			cfg, _, err := loadConfigWithFingerprint(paths.ConfigFile)
 			if err != nil {
+				return err
+			}
+			if err := config.Validate(cfg); err != nil {
 				return err
 			}
 			shell, err := resolveShell(cfg)
@@ -773,12 +777,14 @@ func initConfig(cmd *cobra.Command, paths Paths, flagShell string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	shell, err := configShell()
-	if err != nil {
-		return err
-	}
-	if flagShell != "" {
-		shell = config.Shell(flagShell)
+	// The --shell flag is explicit and outranks the SHELF_SHELL default.
+	shell := config.Shell(flagShell)
+	var err error
+	if shell == "" {
+		shell, err = configShell()
+		if err != nil {
+			return err
+		}
 	}
 	out := cmd.OutOrStdout()
 	if !nonInteractive {
@@ -922,6 +928,17 @@ func printPaths(paths Paths, output io.Writer) error {
 	return nil
 }
 
+// gitStatusTimeout bounds each status run so a stalled git gets killed instead of
+// hanging status forever; a var so tests can shorten it.
+var gitStatusTimeout = 30 * time.Second
+
+// gitHead reads a checkout's HEAD under ctx; pluginStatus passes ctx derived from
+// gitStatusTimeout, and exec.CommandContext kills a stalled git when it fires.
+// A var so tests can stub it.
+var gitHead = func(ctx context.Context, directory string) ([]byte, error) {
+	return exec.CommandContext(ctx, "git", "-C", directory, "rev-parse", "HEAD").Output()
+}
+
 func pluginStatus(paths Paths, output io.Writer) error {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
@@ -948,6 +965,10 @@ func pluginStatus(paths Paths, output io.Writer) error {
 		return err
 	}
 	// Check revisions in parallel; results are indexed by position to keep declaration order.
+	// A stalled git would otherwise hang status forever, so the whole check runs under a deadline
+	// that cancels outstanding git calls.
+	statusContext, cancel := context.WithTimeout(context.Background(), gitStatusTimeout)
+	defer cancel()
 	plugins := locked.Plugins
 	states := make([]string, len(plugins))
 	var tasks []int
@@ -958,9 +979,9 @@ func pluginStatus(paths Paths, output io.Writer) error {
 		}
 		tasks = append(tasks, index)
 	}
-	if err := lock.RunConcurrently(len(tasks), lock.DefaultConcurrency, func(_ context.Context, task int) error {
+	if err := lock.RunConcurrently(statusContext, len(tasks), lock.DefaultConcurrency, func(ctx context.Context, task int) error {
 		plugin := plugins[tasks[task]]
-		output, err := exec.Command("git", "-C", plugin.Directory, "rev-parse", "HEAD").Output()
+		output, err := gitHead(ctx, plugin.Directory)
 		if err != nil {
 			states[tasks[task]] = "unable to read revision"
 		} else if revision := strings.TrimSpace(string(output)); revision != plugin.Rev {

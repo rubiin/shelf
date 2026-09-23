@@ -396,6 +396,167 @@ func TestScriptRendersHooksInTemplateOrder(t *testing.T) {
 	}
 }
 
+// TestScriptQuotesFilePathsSoTheLiteralFileIsSourced checks that a filename containing $, `,
+// or \ is escaped inside the double quotes before it reaches the shell. Without the fix the
+// source line would expand the character and load a different (nonexistent) file.
+func TestScriptQuotesFilePathsSoTheLiteralFileIsSourced(t *testing.T) {
+	for _, name := range []string{"a$b.sh", "a`b.sh", `a\b.sh`} {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			file := filepath.Join(directory, name)
+			if err := os.WriteFile(file, []byte("echo Sourced\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, shell := range []string{"bash", "zsh"} {
+				t.Run(shell, func(t *testing.T) {
+					script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+						Name:  "demo",
+						Files: []string{file},
+					}}}, shell)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(script, `source "`+file+`"`) {
+						t.Fatalf("%s: path emitted unescaped inside double quotes: %q", shell, script)
+					}
+					var output []byte
+					if shell == "bash" {
+						output, err = exec.Command("bash", "-c", `eval "$1"`, "shelf-test", script).CombinedOutput()
+					} else {
+						output, err = exec.Command("zsh", "-fc", `eval "$1"`, "shelf-test", script).CombinedOutput()
+					}
+					if err != nil {
+						t.Fatalf("%s eval failed: %v\n%s", shell, err, output)
+					}
+					if string(output) != "Sourced\n" {
+						t.Fatalf("%s output = %q, want %q", shell, output, "Sourced\n")
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestScriptDeferQuotesFilePathsSoTheLiteralFileIsSourced checks that the deferred queue
+// sources the exact file too: the escaped path keeps the literal $, and the scheduler's
+// ${(q)} re-quotes it for the drain's eval.
+func TestScriptDeferQuotesFilePathsSoTheLiteralFileIsSourced(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "a$b.sh")
+	if err := os.WriteFile(file, []byte("echo Deferred\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{file},
+		Apply: []string{"defer"},
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("zsh", "-fc", `eval "$1"; _shelf_defer_drain`, "shelf-test", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "Deferred\n" {
+		t.Fatalf("zsh output = %q, want %q", output, "Deferred\n")
+	}
+}
+
+// TestScriptEmitsDeferPreambleWhenCustomCodeCallsTheScheduler checks that the scheduler is
+// defined whenever the rendered script actually calls _shelf_defer, no matter the apply name:
+// a custom template or an inline plugin can invoke it without ever naming "defer".
+func TestScriptEmitsDeferPreambleWhenCustomCodeCallsTheScheduler(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		plugin lock.LockedPlugin
+	}{
+		{name: "custom template", plugin: lock.LockedPlugin{
+			Name:  "demo",
+			Files: []string{"/tmp/one.zsh"},
+			Apply: []string{"queue"},
+		}},
+		{name: "inline plugin", plugin: lock.LockedPlugin{
+			Name:   "demo",
+			Inline: "_shelf_defer source \"/tmp/one.zsh\"\n",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{test.plugin}}, "zsh",
+				map[string]string{"queue": "_shelf_defer source \"/tmp/one.zsh\""})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(script, shelfDeferPreamble) {
+				t.Fatalf("script missing the defer preamble: %q", script)
+			}
+			if !strings.Contains(script, "_shelf_defer source") {
+				t.Fatalf("script missing the deferred call: %q", script)
+			}
+		})
+	}
+}
+
+// TestScriptKeepsStaticTextWhenAPluginSelectsNoFiles checks that a {file}-style template on a
+// plugin with zero selected files still renders its static text instead of dropping it.
+func TestScriptKeepsStaticTextWhenAPluginSelectsNoFiles(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+				Name:  "demo",
+				Apply: []string{"source"},
+			}}}, shell, map[string]string{"source": "echo static {file}"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "eval 'echo static \n'\n"; script != want {
+				t.Fatalf("%s script = %q, want %q", shell, script, want)
+			}
+		})
+	}
+}
+
+// TestTemplateKeepsTagDelimitersInsideStringLiterals checks that tokenize closes a tag at the
+// real delimiter, not at a "}}" or "%}" that appears inside a quoted string literal.
+func TestTemplateKeepsTagDelimitersInsideStringLiterals(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		data PluginData
+		want string
+	}{
+		{name: "expression end delimiter", text: `{{ "}}" }}`, want: "}}"},
+		{name: "escaped quote inside expression", text: `{{ "a\"}}" }}`, want: `a"}}`},
+		{name: "block end delimiter", text: `{% if "%}" %}yes{% endif %}`, want: "yes"},
+		{name: "expression after a literal", text: `{{ name }} {{ "}}" }}`, data: PluginData{Name: "demo"}, want: "demo }}"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Template(test.name, test.text, test.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result != test.want {
+				t.Fatalf("result = %q, want %q", result, test.want)
+			}
+		})
+	}
+}
+
+// TestTemplateRejectsEmptyIfCondition checks that an if with no condition errors instead of
+// rendering its body unconditionally.
+func TestTemplateRejectsEmptyIfCondition(t *testing.T) {
+	for _, template := range []string{
+		"{% if %}yes{% endif %}",
+		"{% if   %}yes{% endif %}",
+		"{% if %}{% endif %}",
+		"{% if hooks?.pre %}pre{% else if %}empty{% endif %}",
+	} {
+		if _, err := Template("if", template, PluginData{}); err == nil {
+			t.Errorf("template %q was accepted", template)
+		}
+	}
+}
+
 func TestScriptUsesPluginApplyTemplates(t *testing.T) {
 	templates := map[string]string{
 		"defer": "echo deferred {name}",
@@ -698,7 +859,7 @@ func TestExpressionPlansMatchTheFullEvaluator(t *testing.T) {
 	}
 	for _, expression := range []string{
 		"name", "dir", "file", "files", "files.0", "files.1", "files.2", "hooks", "hooks?.pre", "hooks?.missing", "hooks.pre",
-		"name | nl", "hooks?.pre | nl", "files.0 | nl", "missing | nl", "unknown.thing | nl", "not name", "?.name",
+		"name | nl", "hooks?.pre | nl", "files.0 | nl", "file | dquote", "missing | nl", "unknown.thing | nl", "not name", "?.name",
 		"missing", "missing.member", "true", "false", "42", "\"literal\"", "get(hooks, \"pre\")", "name.member", "files.0.member",
 	} {
 		planned, plannedErr := planExpression(expression).evaluate(expression, current)

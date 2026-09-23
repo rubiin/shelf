@@ -146,7 +146,14 @@ func GitDirectory(dataDir string, request Request) (string, error) {
 	if host := parsed.Hostname(); host != "" {
 		segments = append(segments, host)
 	}
-	return filepath.Join(append(segments, filepath.FromSlash(relative))...), nil
+	result := filepath.Join(append(segments, filepath.FromSlash(relative))...)
+	// filepath.Join cleans ".." segments, so check the merged path stays inside the
+	// clone directory instead of letting a crafted URL escape the data directory.
+	root := CloneDir(dataDir)
+	if result != root && !strings.HasPrefix(result, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("git source %q escapes the clone directory %s", rawURL, root)
+	}
+	return result, nil
 }
 
 // RemoteDirectory is <download dir>/<host>/<path>, returned as directory + file.
@@ -169,6 +176,12 @@ func RemoteDirectory(dataDir, rawURL string) (string, string, error) {
 	}
 	parents := append([]string{DownloadDir(dataDir), parsed.Hostname()}, segments[:len(segments)-1]...)
 	directory := filepath.Join(parents...)
+	// filepath.Join cleans ".." segments, so check the merged path stays inside the
+	// download directory instead of letting a crafted URL escape the data directory.
+	root := DownloadDir(dataDir)
+	if directory != root && !strings.HasPrefix(directory, root+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("remote source %q escapes the download directory %s", rawURL, root)
+	}
 	return directory, filepath.Join(directory, segments[len(segments)-1]), nil
 }
 

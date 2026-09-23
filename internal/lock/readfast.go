@@ -242,18 +242,34 @@ func (p *fastLockParser) parseAssignment() bool {
 	if !p.skipWhitespace(false) || p.pos == len(p.data) {
 		return false
 	}
-	if p.data[p.pos] == '[' {
+	switch p.data[p.pos] {
+	case '[':
 		items, ok := p.parseArray()
 		if !ok || !p.endLine() {
 			return false
 		}
 		return p.assignList(key, parts, items)
-	}
-	text, ok := p.parseString()
-	if !ok || !p.endLine() {
+	case '"':
+		text, ok := p.parseString()
+		if !ok || !p.endLine() {
+			return false
+		}
+		return p.assignText(key, parts, text)
+	case 't', 'f':
+		value, ok := p.parseBool()
+		if !ok || !p.endLine() {
+			return false
+		}
+		return p.assignBool(key, parts, value)
+	case '+', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		value, ok := p.parseInt()
+		if !ok || !p.endLine() {
+			return false
+		}
+		return p.assignInt(key, parts, value)
+	default:
 		return false
 	}
-	return p.assignText(key, parts, text)
 }
 
 func (p *fastLockParser) assignText(key string, parts int, text string) bool {
@@ -340,10 +356,82 @@ func (p *fastLockParser) assignList(key string, parts int, items []string) bool 
 		plugin.Files = items
 	case "apply":
 		plugin.Apply = items
+	case "cloneopts":
+		plugin.CloneOpts = items
+	case "ignore":
+		plugin.Ignore = items
 	default:
 		return false
 	}
 	return true
+}
+
+func (p *fastLockParser) assignBool(key string, parts int, value bool) bool {
+	if p.table != tablePlugin || parts != 1 || key != "frozen" || !p.claimPluginField(key) {
+		return false
+	}
+	p.locked.Plugins[p.plugin].Frozen = value
+	return true
+}
+
+func (p *fastLockParser) assignInt(key string, parts int, value int64) bool {
+	if p.table != tablePlugin || parts != 1 || key != "depth" || !p.claimPluginField(key) {
+		return false
+	}
+	depth := int(value)
+	if int64(depth) != value {
+		// Out of platform int range: the general decoder fails there too.
+		return false
+	}
+	p.locked.Plugins[p.plugin].Depth = &depth
+	return true
+}
+
+// parseBool reads the lowercase TOML booleans; Write never emits anything else.
+func (p *fastLockParser) parseBool() (bool, bool) {
+	switch {
+	case strings.HasPrefix(string(p.data[p.pos:]), "true"):
+		p.pos += 4
+		return true, true
+	case strings.HasPrefix(string(p.data[p.pos:]), "false"):
+		p.pos += 5
+		return false, true
+	}
+	return false, false
+}
+
+// parseInt reads the plain decimal integers Write emits. Anything else TOML
+// allows (underscores, hex, leading zeros) bails to the general decoder.
+func (p *fastLockParser) parseInt() (int64, bool) {
+	start := p.pos
+	if p.data[p.pos] == '+' || p.data[p.pos] == '-' {
+		p.pos++
+	}
+	if p.pos == len(p.data) || !isDecimalByte(p.data[p.pos]) {
+		return 0, false
+	}
+	for p.pos < len(p.data) && isDecimalByte(p.data[p.pos]) {
+		p.pos++
+	}
+	digits := string(p.data[start:p.pos])
+	firstDigit := 0
+	if digits[0] == '+' || digits[0] == '-' {
+		firstDigit = 1
+	}
+	// TOML forbids leading zeros; rejecting them keeps the fast reader from
+	// accepting numbers the general decoder rejects.
+	if len(digits) > firstDigit+1 && digits[firstDigit] == '0' {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func isDecimalByte(character byte) bool {
+	return character >= '0' && character <= '9'
 }
 
 // claimPluginField rejects unknown or duplicate keys.
@@ -390,6 +478,14 @@ func pluginFieldBit(key string) (uint16, bool) {
 		return 1 << 6, true
 	case "apply":
 		return 1 << 7, true
+	case "cloneopts":
+		return 1 << 9, true
+	case "depth":
+		return 1 << 10, true
+	case "frozen":
+		return 1 << 11, true
+	case "ignore":
+		return 1 << 12, true
 	}
 	return 0, false
 }

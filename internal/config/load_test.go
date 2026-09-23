@@ -258,6 +258,52 @@ func TestValidateChecksCloneOptions(t *testing.T) {
 
 func intPtr(value int) *int { return &value }
 
+func TestLoadRejectsUnknownTOMLKeys(t *testing.T) {
+	// A typo in a top-level, plugin, or inline-table key must fail the decode
+	// instead of silently ignoring the misspelled config.
+	tests := []struct {
+		name     string
+		contents string
+		key      string
+	}{
+		{name: "top-level", contents: "optinal = true\n", key: "optinal"},
+		{name: "plugin field", contents: "[plugins.demo]\ngithub2 = \"rubiin/demo\"\n", key: "plugins.demo.github2"},
+		{name: "inline table", contents: "[plugins]\ndemo = { optinal = true }\n", key: "plugins.demo.optinal"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("config with an unknown key was accepted")
+			}
+			if !strings.Contains(err.Error(), "unknown keys") || !strings.Contains(err.Error(), test.key) {
+				t.Fatalf("error = %v, want an unknown-keys error naming %q", err, test.key)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsKnownTaggedKeys(t *testing.T) {
+	// [env] plugins and quoted plugin names are user data for maps, not typos,
+	// so they must still decode after unknown keys are rejected.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	contents := "[env]\nplugins = \"(git npm macos)\"\n\n[plugins.\"my.demo\"]\ngithub = \"rubiin/demo\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Env["plugins"] != "(git npm macos)" || cfg.Plugins["my.demo"].GitHub != "rubiin/demo" {
+		t.Fatalf("known keys mis-decoded: %+v", cfg)
+	}
+}
+
 func TestBuildRequiresADirectorySource(t *testing.T) {
 	tests := []struct {
 		name   string

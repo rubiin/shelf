@@ -2,6 +2,8 @@ package filelock
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -104,6 +106,105 @@ func TestAcquireReportsWhenItWaits(t *testing.T) {
 	defer func() { _ = guard.Release() }()
 	if !bytes.Contains(warnings.Bytes(), []byte("file lock")) {
 		t.Fatalf("warnings = %q, want a waiting message", warnings.String())
+	}
+}
+
+// TestAcquireContextSucceedsWhenFree verifies the context-aware acquire still takes an
+// uncontended lock promptly.
+func TestAcquireContextSucceedsWhenFree(t *testing.T) {
+	directory := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	guard, err := AcquireContext(ctx, directory, true, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guard == nil {
+		t.Fatal("exclusive lock was skipped for an existing directory")
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAcquireContextTimesOutOnHeldLock verifies a blocked acquire honors its context
+// deadline instead of waiting for the holder forever.
+func TestAcquireContextTimesOutOnHeldLock(t *testing.T) {
+	directory := t.TempDir()
+	first, err := Acquire(directory, true, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Release() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = AcquireContext(ctx, directory, true, io.Discard)
+	if err == nil {
+		t.Fatal("a held lock was acquired despite the expiry")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want a wrapped context deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("acquire timed out after %s, want it to stop at the deadline", elapsed)
+	}
+	// The failed wait must not have taken the lock; the holder still holds it, so a
+	// fresh short-deadline acquire must time out too.
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer checkCancel()
+	if guard, err := AcquireContext(checkCtx, directory, true, io.Discard); err == nil {
+		_ = guard.Release()
+		t.Fatal("the timed-out acquire left the lock free while the holder still held it")
+	}
+}
+
+// TestAcquireContextCancelledBeforeStart verifies a pre-cancelled context fails fast
+// even when no other process holds the lock.
+func TestAcquireContextCancelledBeforeStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	guard, err := AcquireContext(ctx, t.TempDir(), true, io.Discard)
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want a wrapped context cancellation", err)
+	}
+	if guard != nil {
+		_ = guard.Release()
+		t.Fatal("a cancelled acquire returned a guard")
+	}
+}
+
+// TestAcquireContextSucceedsAfterRelease verifies the retry loop acquires once the
+// holder releases, rather than bailing on the first contention.
+func TestAcquireContextSucceedsAfterRelease(t *testing.T) {
+	directory := t.TempDir()
+	first, err := Acquire(directory, true, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	acquired := make(chan error, 1)
+	go func() {
+		guard, err := AcquireContext(ctx, directory, true, io.Discard)
+		if err == nil {
+			_ = guard.Release()
+		}
+		acquired <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-acquired:
+		if err != nil {
+			t.Fatalf("acquire after release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("acquire did not finish after the holder released")
 	}
 }
 

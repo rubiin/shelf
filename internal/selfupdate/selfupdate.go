@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -88,6 +89,13 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		}
 		options.Target = executable
 	}
+	// Write through a symlink to the real binary, so a package-managed install
+	// keeps its link; renaming over the link would silently replace it.
+	resolved, err := resolveTarget(options.Target)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve the running binary: %w", err)
+	}
+	options.Target = resolved
 	if !options.Force && (options.CurrentVersion == "" || options.CurrentVersion == "dev") {
 		return Result{}, fmt.Errorf("self-update refused: this is a development build (%q); install a release or pass --force", displayVersion(options.CurrentVersion))
 	}
@@ -96,7 +104,7 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		return Result{}, err
 	}
 	next := strings.TrimPrefix(latest.TagName, "v")
-	if next != "" && next == strings.TrimPrefix(options.CurrentVersion, "v") && !options.Force {
+	if next != "" && !options.Force && alreadyCurrent(options.CurrentVersion, latest.TagName) {
 		return Result{Updated: false, Next: next}, nil
 	}
 	name, err := archiveName(runtime.GOOS, runtime.GOARCH)
@@ -139,6 +147,117 @@ func displayVersion(version string) string {
 		return "dev"
 	}
 	return version
+}
+
+// alreadyCurrent reports whether the installed binary must not be replaced by
+// the release tag: it is semantically at or above the tag, or the two equal a
+// non-semver string. Comparing instead of matching equality prevents a newer or
+// yanked binary from being downgraded, and treats "v1.2.3" and "1.2.3" alike.
+func alreadyCurrent(current, tag string) bool {
+	if installed, ok := parseVersion(current); ok {
+		if release, ok := parseVersion(tag); ok {
+			return compareVersions(installed, release) >= 0
+		}
+	}
+	// One side is not a semver tag: keep the exact-match guard.
+	return strings.TrimPrefix(current, "v") == strings.TrimPrefix(tag, "v")
+}
+
+// releaseVersion is one parsed semantic version; build metadata is dropped
+// because it never affects precedence.
+type releaseVersion struct {
+	major, minor, patch int
+	pre                 string
+}
+
+// parseVersion parses "v?MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]". The v prefix
+// may be present on either side, so tags written either way compare equal.
+func parseVersion(input string) (releaseVersion, bool) {
+	trimmed := strings.TrimPrefix(input, "v")
+	if build := strings.Index(trimmed, "+"); build >= 0 {
+		trimmed = trimmed[:build]
+	}
+	pre := ""
+	if dash := strings.Index(trimmed, "-"); dash >= 0 {
+		pre = trimmed[dash+1:]
+		trimmed = trimmed[:dash]
+	}
+	parts := strings.Split(trimmed, ".")
+	if len(parts) != 3 {
+		return releaseVersion{}, false
+	}
+	var numbers [3]int
+	for index, part := range parts {
+		if part == "" {
+			return releaseVersion{}, false
+		}
+		number, err := strconv.Atoi(part)
+		if err != nil || number < 0 {
+			return releaseVersion{}, false
+		}
+		numbers[index] = number
+	}
+	return releaseVersion{major: numbers[0], minor: numbers[1], patch: numbers[2], pre: pre}, true
+}
+
+// compareVersions orders two parsed versions by semver precedence. A final
+// release outranks any pre-release with the same numbers.
+func compareVersions(a, b releaseVersion) int {
+	if a.major != b.major {
+		return sign(a.major - b.major)
+	}
+	if a.minor != b.minor {
+		return sign(a.minor - b.minor)
+	}
+	if a.patch != b.patch {
+		return sign(a.patch - b.patch)
+	}
+	switch {
+	case a.pre == "" && b.pre == "":
+		return 0
+	case a.pre == "":
+		return 1
+	case b.pre == "":
+		return -1
+	}
+	return comparePreReleases(a.pre, b.pre)
+}
+
+// comparePreReleases orders dot-separated pre-release identifiers: numeric
+// identifiers sort before alphanumeric, and numeric identifiers by value.
+func comparePreReleases(a, b string) int {
+	left := strings.Split(a, ".")
+	right := strings.Split(b, ".")
+	for index := 0; index < len(left) && index < len(right); index++ {
+		if compared := compareIdentifier(left[index], right[index]); compared != 0 {
+			return compared
+		}
+	}
+	return sign(len(left) - len(right))
+}
+
+func compareIdentifier(a, b string) int {
+	aNumber, aErr := strconv.Atoi(a)
+	bNumber, bErr := strconv.Atoi(b)
+	switch {
+	case aErr == nil && bErr == nil:
+		return sign(aNumber - bNumber)
+	case aErr == nil:
+		return -1
+	case bErr == nil:
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func sign(number int) int {
+	switch {
+	case number < 0:
+		return -1
+	case number > 0:
+		return 1
+	}
+	return 0
 }
 
 // fetchRelease returns the latest published release.
@@ -264,6 +383,31 @@ func extractBinary(archive []byte) ([]byte, error) {
 	}
 }
 
+// resolveTarget follows symlinks to the real binary path, so an update writes
+// through a symlink (e.g. ~/.local/bin/shelf -> /usr/bin/shelf) instead of
+// replacing the link. A missing target is returned unchanged so a fresh install
+// still works.
+func resolveTarget(target string) (string, error) {
+	info, err := os.Lstat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return target, nil
+		}
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return target, nil
+	}
+	link, err := os.Readlink(target)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(link) {
+		link = filepath.Join(filepath.Dir(target), link)
+	}
+	return resolveTarget(link)
+}
+
 // checkWritable fails fast, before the download, so a package-managed install
 // gets an actionable error instead of a bare permission-denied.
 func checkWritable(target string) error {
@@ -278,7 +422,8 @@ func checkWritable(target string) error {
 	return nil
 }
 
-// installBinary renames a temp file over target, so a crash leaves the old binary intact.
+// installBinary writes a temp file, fsyncs it, and renames it over target, so
+// a crash leaves the old binary intact and never a zero-length one.
 func installBinary(target string, contents []byte) error {
 	temporary, err := os.CreateTemp(filepath.Dir(target), ".shelf-update-*")
 	if err != nil {
@@ -294,10 +439,28 @@ func installBinary(target string, contents []byte) error {
 		_ = temporary.Close()
 		return err
 	}
+	// Flush the temp contents before the rename, so a crash right after the
+	// rename can't leave a zero-length or partial binary in place.
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync temp binary: %w", err)
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryName, target)
+	if err := os.Rename(temporaryName, target); err != nil {
+		return err
+	}
+	// Sync the containing directory so the rename itself is durable.
+	handle, err := os.Open(filepath.Dir(target))
+	if err != nil {
+		return fmt.Errorf("open install directory: %w", err)
+	}
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close()
+		return fmt.Errorf("sync install directory: %w", err)
+	}
+	return handle.Close()
 }
 
 func logf(diagnostics io.Writer, format string, arguments ...any) {

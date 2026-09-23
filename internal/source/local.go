@@ -25,6 +25,13 @@ func installLocal(request Request) (Installed, error) {
 		if err != nil {
 			return Installed{}, err
 		}
+		subInfo, err := os.Stat(sourceDir)
+		if err != nil {
+			return Installed{}, fmt.Errorf("local source dir %q: %w", request.Dir, err)
+		}
+		if !subInfo.IsDir() {
+			return Installed{}, fmt.Errorf("local source dir %q is not a directory", request.Dir)
+		}
 		return Installed{Directory: sourceDir, Root: filepath.Clean(localPath)}, nil
 	}
 	return Installed{Directory: filepath.Dir(localPath), Root: filepath.Dir(localPath), File: filepath.Clean(localPath)}, nil

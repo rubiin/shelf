@@ -40,6 +40,11 @@ func Confirm(question string, in *bufio.Reader, out io.Writer) (bool, error) {
 		_, _ = fmt.Fprintf(out, "%s [y/N] ", question)
 		answer, err := readLine(in)
 		if err != nil {
+			// EOF (Ctrl+D, </dev/null) means no answer, and the documented
+			// [y/N] empty default declines.
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
 			return false, fmt.Errorf("read answer: %w", err)
 		}
 		switch strings.ToLower(strings.TrimSpace(answer)) {
@@ -65,10 +70,17 @@ func matchOption(answer string, options []string) (string, bool) {
 	return "", false
 }
 
-// readLine accepts a final line without a newline; only empty EOF is an error.
+// readLine accepts a final line without a newline; genuine EOF on an empty line
+// is an error, and real I/O errors are never swallowed by a partial line.
 func readLine(in *bufio.Reader) (string, error) {
 	line, err := in.ReadString('\n')
-	if err != nil && line == "" {
+	if err == nil {
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	if !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	if line == "" {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil

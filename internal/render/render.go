@@ -45,20 +45,11 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 		}
 	}
 
-	var output scriptBuffer
-	output.Grow(64 * len(locked.Plugins))
-	for _, name := range sortedEnvironmentNames(locked.Env) {
-		// Env assignments run directly in the current shell, so they need no eval wrapper.
-		output.WriteString(name)
-		output.WriteString("=")
-		output.WriteString(locked.Env[name])
-		output.WriteString("\n")
-	}
-	// The defer template queues sources into the scheduler defined here, so it must be emitted
-	// first. Bash and non-interactive runs degrade to plain source: no scheduler.
-	if shell == "zsh" && usesDefer(locked.Plugins) {
-		output.WriteString(shelfDeferPreamble)
-	}
+	// Render the plugins first so defer usage is detected from what actually calls the
+	// scheduler, not from the literal apply name: a custom template or inline plugin can
+	// invoke _shelf_defer under any name.
+	var scripts scriptBuffer
+	scripts.Grow(64 * len(locked.Plugins))
 	var current scope
 	for _, plugin := range locked.Plugins {
 		var pluginOutput scriptBuffer
@@ -90,10 +81,26 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 			}
 		}
 		// Eval per plugin: a single whole-script parse would not pick up aliases defined along the way.
-		output.WriteString("eval ")
-		output.WriteString(quoteShell(pluginOutput.String()))
+		scripts.WriteString("eval ")
+		scripts.WriteString(quoteShell(pluginOutput.String()))
+		scripts.WriteString("\n")
+	}
+
+	var output scriptBuffer
+	output.Grow(scripts.Len() + 64*len(locked.Env))
+	for _, name := range sortedEnvironmentNames(locked.Env) {
+		// Env assignments run directly in the current shell, so they need no eval wrapper.
+		output.WriteString(name)
+		output.WriteString("=")
+		output.WriteString(locked.Env[name])
 		output.WriteString("\n")
 	}
+	// The defer template queues sources into the scheduler defined here, so it must be emitted
+	// first. Bash and non-interactive runs degrade to plain source: no scheduler.
+	if shell == "zsh" && callsDefer(&scripts) {
+		output.WriteString(shelfDeferPreamble)
+	}
+	output.WriteString(scripts.String())
 	return output.String(), nil
 }
 
@@ -106,19 +113,11 @@ func sortedEnvironmentNames(environment map[string]string) []string {
 	return names
 }
 
-// usesDefer: inline plugins carry their own text and never use the scheduler.
-func usesDefer(plugins []lock.LockedPlugin) bool {
-	for _, plugin := range plugins {
-		if plugin.Inline != "" {
-			continue
-		}
-		for _, name := range plugin.Apply {
-			if name == "defer" {
-				return true
-			}
-		}
-	}
-	return false
+// callsDefer reports whether the rendered plugin scripts invoke the _shelf_defer scheduler,
+// which must therefore be defined before them. Checking the rendered output covers custom
+// templates and inline plugins that call it under a name other than "defer".
+func callsDefer(scripts *scriptBuffer) bool {
+	return strings.Contains(scripts.String(), "_shelf_defer")
 }
 
 func quoteShell(text string) string {
@@ -198,6 +197,16 @@ func renderTemplateText(name, text string, current *scope, output *scriptBuffer)
 		return nil
 	}
 	data := current.plugin
+	if len(data.Files) == 0 {
+		// No files to expand {file} per file, but the chunk's static text still matters:
+		// render it with the placeholder left empty rather than dropping the chunk.
+		rendered := normalizeRenderedOutput(expandPlaceholders(text, data))
+		if rendered != "" && !strings.HasSuffix(rendered, "\n") {
+			rendered += "\n"
+		}
+		output.WriteString(rendered)
+		return nil
+	}
 	for _, file := range data.Files {
 		data.File = file
 		rendered := normalizeRenderedOutput(expandPlaceholders(text, data))

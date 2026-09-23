@@ -49,9 +49,14 @@ func installRemote(ctx context.Context, directory, file string, request Request)
 	}
 	temporaryName := temporary.Name()
 	defer func() { _ = os.Remove(temporaryName) }()
-	if _, err := temporary.ReadFrom(response.Body); err != nil {
+	written, err := temporary.ReadFrom(response.Body)
+	if err != nil {
 		_ = temporary.Close()
 		return Installed{}, err
+	}
+	if written == 0 {
+		_ = temporary.Close()
+		return Installed{}, fmt.Errorf("download remote source: HTTP %s returned an empty body", response.Status)
 	}
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()

@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"shelf/internal/config"
 	"shelf/internal/lock"
@@ -316,6 +318,30 @@ func TestReloadRejectsAnUnsupportedShellOverride(t *testing.T) {
 	}
 	if !strings.Contains(diagnostics.String(), `unsupported shell "csh" in SHELF_SHELL`) {
 		t.Fatalf("reload diagnostics = %q, want unsupported shell error", diagnostics.String())
+	}
+}
+
+func TestReloadRejectsAnInvalidConfigShell(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"fish\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	var diagnostics bytes.Buffer
+	if err := Execute([]string{"reload"}, &output, &diagnostics); err == nil || !strings.Contains(diagnostics.String(), "unsupported shell") {
+		t.Fatalf("reload err = %v, diagnostics = %q, want unsupported shell error", err, diagnostics.String())
+	}
+	if output.Len() != 0 {
+		t.Fatalf("reload stdout = %q, want empty", output.String())
 	}
 }
 
@@ -776,6 +802,49 @@ func TestInitShellFlagSkipsShellPrompt(t *testing.T) {
 	}
 	if string(contents) != config.DefaultConfig(config.Bash) {
 		t.Fatalf("config contents = %q, want %q", contents, config.DefaultConfig(config.Bash))
+	}
+}
+
+func TestInitShellFlagBeatsInvalidShellEnvironment(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		envShell  string
+		flagShell string
+		wantErr   string
+		want      string
+	}{
+		// The --shell flag is explicit and outranks an invalid SHELF_SHELL.
+		{name: "flag beats invalid env", envShell: "fish", flagShell: "bash", want: "bash"},
+		{name: "flag beats valid env", envShell: "zsh", flagShell: "bash", want: "bash"},
+		// Without the flag the invalid environment still fails.
+		{name: "invalid env without flag", envShell: "fish", wantErr: "SHELF_SHELL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, configFile := initTestEnv(t)
+			t.Setenv("SHELF_SHELL", test.envShell)
+			var stdout bytes.Buffer
+			args := []string{"init", "--non-interactive"}
+			if test.flagShell != "" {
+				args = append(args, "--shell", test.flagShell)
+			}
+			err := Execute(args, &stdout, &bytes.Buffer{})
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want error containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			contents, err := os.ReadFile(configFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(contents) != config.DefaultConfig(config.Shell(test.want)) {
+				t.Fatalf("config contents = %q, want %q", contents, config.DefaultConfig(config.Shell(test.want)))
+			}
+		})
 	}
 }
 
@@ -1248,6 +1317,79 @@ func TestStatusChecksGitRevisionsInParallelAndKeepsOrder(t *testing.T) {
 	want := "first: ok\nsecond: revision " + currentSecond + ", want " + lockedSecond + "\n"
 	if output.String() != want {
 		t.Fatalf("status output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestStatusCancelsAWedgedGit(t *testing.T) {
+	// A stalled git must be killed by status's own deadline; otherwise status hangs forever.
+	originalTimeout := gitStatusTimeout
+	gitStatusTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { gitStatusTimeout = originalTimeout })
+
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	revision := gitCommit(t, repository, "plugin.zsh", "echo revision\n")
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.test]\ngit = \"" + repository + "\"\nrev = \"" + revision + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wedge gitHead: hand the context back, then block until it is cancelled.
+	originalGitHead := gitHead
+	contexts := make(chan context.Context, 1)
+	gitHead = func(ctx context.Context, _ string) ([]byte, error) {
+		contexts <- ctx
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { gitHead = originalGitHead })
+
+	// status must return promptly: only real cancellation unblocks a wedged git.
+	type statusResult struct {
+		err    error
+		output string
+	}
+	done := make(chan statusResult, 1)
+	go func() {
+		var output bytes.Buffer
+		err := Execute([]string{"status"}, &output, &bytes.Buffer{})
+		done <- statusResult{err: err, output: output.String()}
+	}()
+	var result statusResult
+	select {
+	case result = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("status hung on a wedged git; cancellation is not real")
+	}
+	ctx := <-contexts
+	if ctx == nil {
+		t.Fatal("gitHead received a nil context")
+	}
+	// Cancellation must be real: a deadline ctx so a wedged git actually gets killed.
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("gitHead context has no deadline; a wedged git could never be cancelled")
+	}
+	if result.err == nil {
+		t.Fatal("status succeeded despite a wedged git that had to be cancelled")
+	}
+	want := "test: unable to read revision\n"
+	if result.output != want {
+		t.Fatalf("status output = %q, want %q", result.output, want)
 	}
 }
 

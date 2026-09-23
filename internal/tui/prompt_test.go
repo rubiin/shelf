@@ -3,6 +3,8 @@ package tui
 import (
 	"bufio"
 	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -121,8 +123,59 @@ func TestConfirmRepromptsOnInvalidAnswer(t *testing.T) {
 }
 
 func TestConfirmReportsReadError(t *testing.T) {
-	_, _, err := runConfirm(t, "", "Initialize?")
+	_, err := Confirm("Initialize?", bufio.NewReader(&errReader{data: "x", err: errors.New("io broken")}), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "read answer") {
 		t.Fatalf("err = %v, want read-answer error", err)
+	}
+}
+
+// errReader yields data and err in one read, then repeats err; it simulates a
+// real I/O error (EIO, dropped connection) arriving partway through a line.
+type errReader struct {
+	data string
+	err  error
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, r.err
+	}
+	return 0, r.err
+}
+
+func TestReadLinePartialLineEndings(t *testing.T) {
+	// A final line without a newline is accepted.
+	line, err := readLine(bufio.NewReader(strings.NewReader("bash")))
+	if err != nil || line != "bash" {
+		t.Fatalf("final line = %q, err = %v; want bash, nil", line, err)
+	}
+	// Genuine EOF on an empty line stays an error.
+	_, err = readLine(bufio.NewReader(strings.NewReader("")))
+	if err == nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("empty EOF err = %v, want io.EOF", err)
+	}
+	// A real I/O error is not swallowed by a partial line.
+	boom := errors.New("connection dropped")
+	line, err = readLine(bufio.NewReader(&errReader{data: "bash", err: boom}))
+	if err == nil || !errors.Is(err, boom) {
+		t.Fatalf("partial line = %q, err = %v; want the real error propagated", line, err)
+	}
+	if line != "" {
+		t.Fatalf("partial line %q returned as a success on a real error", line)
+	}
+}
+
+func TestConfirmEOFDeclines(t *testing.T) {
+	confirmed, output, err := runConfirm(t, "", "Initialize?")
+	if err != nil {
+		t.Fatalf("EOF at confirm err = %v, want decline", err)
+	}
+	if confirmed {
+		t.Fatal("EOF at confirm confirmed = true, want false (empty default)")
+	}
+	if !strings.Contains(output, "Initialize? [y/N]") {
+		t.Fatalf("output = %q, missing prompt", output)
 	}
 }

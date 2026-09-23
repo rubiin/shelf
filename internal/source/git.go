@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,7 +28,16 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 			return Installed{}, err
 		}
 	}
-	if _, err := os.Stat(filepath.Join(directory, ".git")); os.IsNotExist(err) {
+	gitDir := filepath.Join(directory, ".git")
+	_, statErr := os.Stat(gitDir)
+	switch {
+	case statErr == nil:
+		if request.Update && !request.Frozen {
+			if err := runGitIn(ctx, directory, "fetch", "--all", "--tags"); err != nil {
+				return Installed{}, err
+			}
+		}
+	case errors.Is(statErr, os.ErrNotExist):
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
 			return Installed{}, err
 		}
@@ -55,10 +65,8 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 				return Installed{}, err
 			}
 		}
-	} else if request.Update && !request.Frozen {
-		if err := runGitIn(ctx, directory, "fetch", "--all", "--tags"); err != nil {
-			return Installed{}, err
-		}
+	default:
+		return Installed{}, fmt.Errorf("check existing clone at %s: %w", gitDir, statErr)
 	}
 	if ref != "" {
 		// A shallow clone may not hold the pinned revision; fetch the object first.

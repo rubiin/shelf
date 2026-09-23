@@ -122,7 +122,7 @@ func TestSelectBareEscapeCancels(t *testing.T) {
 	var output bytes.Buffer
 	finished := make(chan error, 1)
 	go func() {
-		_, err := Select([]string{"alpha", "beta"}, IO{In: readPipe, Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore})
+		_, err := Select([]string{"alpha", "beta"}, IO{In: readPipe, Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore, IsTerminal: func(int) bool { return true }})
 		finished <- err
 	}()
 	if _, err := writePipe.Write([]byte{0x1b}); err != nil {
@@ -249,4 +249,132 @@ func TestSelectRequiresTerminal(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "terminal") {
 		t.Fatalf("err = %v, want terminal error", err)
 	}
+}
+
+func TestSelectEscapeSplitAcrossReads(t *testing.T) {
+	// A slow PTY can deliver ESC, [, and the final byte in separate reads; the
+	// grace period must reassemble an arrow key instead of canceling.
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = readPipe.Close() }()
+	defer func() { _ = writePipe.Close() }()
+
+	terminal := &fakeTerminal{}
+	var output bytes.Buffer
+	finished := make(chan error, 1)
+	go func() {
+		_, err := Select([]string{"alpha", "beta"}, IO{In: readPipe, Out: &output, MakeRaw: terminal.MakeRaw, Restore: terminal.Restore, IsTerminal: func(int) bool { return true }})
+		finished <- err
+	}()
+
+	// One byte per write, spaced out, so each lands in its own read.
+	for _, b := range []byte{0x1b, '[', 'B', ' '} {
+		if _, err := writePipe.Write([]byte{b}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if _, err := writePipe.Write([]byte{'\r'}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-finished:
+		if errors.Is(err, ErrCancelled) {
+			t.Fatal("escape sequence split across reads was misread as a cancel")
+		}
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("picker did not finish after a split escape sequence")
+	}
+	if !terminal.restored {
+		t.Fatal("terminal not restored")
+	}
+	// ESC [ B moved down, space toggled beta, so a checkbox is marked.
+	if !strings.Contains(output.String(), "[x] beta") {
+		t.Fatalf("split escape sequence did not navigate: %q", output.String())
+	}
+}
+
+func TestSelectRedrawCountsPhysicalLines(t *testing.T) {
+	oldWidth := terminalWidth
+	terminalWidth = func(int) int { return 10 }
+	defer func() { terminalWidth = oldWidth }()
+
+	tests := []struct {
+		name    string
+		options []string
+		want    string
+	}{
+		{"wrapped option", []string{"a very long option that wraps", "beta"}, "\x1b[5A\r"},
+		{"newline option", []string{"alpha\nbeta", "g"}, "\x1b[4A\r"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, output, err := runSelect(t, "\x1b[B \r", tt.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output, tt.want) {
+				t.Fatalf("redraw escape missing %q: %q", tt.want, output)
+			}
+		})
+	}
+}
+
+func TestSelectRejectsRedirectedOutput(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	_, err = Select([]string{"alpha"}, IO{
+		In:      strings.NewReader("\r"),
+		Out:     file,
+		MakeRaw: func(int) (*term.State, error) { return &term.State{}, nil },
+		Restore: func(int, *term.State) error { return nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("redirected output err = %v, want requires-terminal error", err)
+	}
+	if got, rerr := os.ReadFile(file.Name()); rerr != nil || len(got) != 0 {
+		t.Fatalf("redirected output received ANSI bytes: %q", got)
+	}
+}
+
+func TestSelectZeroValueIOFailsCleanly(t *testing.T) {
+	_, err := Select([]string{"alpha"}, IO{})
+	if err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("zero-value IO err = %v, want requires-terminal error", err)
+	}
+}
+
+type panickingReader struct{}
+
+func (panickingReader) Read([]byte) (int, error) {
+	panic("reader exploded")
+}
+
+func TestSelectRestoresTerminalOnPanic(t *testing.T) {
+	terminal := &fakeTerminal{}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected the picker's panic to propagate")
+		}
+		if !terminal.restored {
+			t.Fatal("terminal not restored after a picker panic")
+		}
+	}()
+	_, _ = Select([]string{"alpha"}, IO{
+		In:         panickingReader{},
+		Out:        &bytes.Buffer{},
+		MakeRaw:    terminal.MakeRaw,
+		Restore:    terminal.Restore,
+		IsTerminal: func(int) bool { return true },
+	})
 }

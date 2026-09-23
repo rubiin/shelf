@@ -364,3 +364,143 @@ func TestFetchReleaseDecodesGitHubJSONKeys(t *testing.T) {
 		t.Errorf("assetURL = %q, %v, want the browser download URL", url, ok)
 	}
 }
+
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want int
+	}{
+		{name: "equal", a: "1.2.3", b: "1.2.3", want: 0},
+		{name: "v prefixes equal", a: "v1.2.3", b: "1.2.3", want: 0},
+		{name: "numeric not lexical", a: "1.10.0", b: "1.9.9", want: 1},
+		{name: "build metadata ignored", a: "1.2.3+build", b: "1.2.3", want: 0},
+		{name: "build metadata on the other side", a: "1.2.3", b: "1.2.3+linux.amd64", want: 0},
+		{name: "prerelease below release", a: "1.0.0-alpha", b: "1.0.0", want: -1},
+		{name: "release above prerelease", a: "1.0.0", b: "1.0.0-alpha", want: 1},
+		{name: "alphanumeric identifier order", a: "1.0.0-alpha", b: "1.0.0-beta", want: -1},
+		{name: "numeric identifier before alphanumeric", a: "1.0.0-alpha.1", b: "1.0.0-alpha.beta", want: -1},
+		{name: "shorter prerelease prefix", a: "1.0.0-alpha", b: "1.0.0-alpha.1", want: -1},
+		{name: "numeric identifiers by value", a: "1.0.0-beta.2", b: "1.0.0-beta.11", want: -1},
+		{name: "longer prerelease wins", a: "1.0.0-beta.11", b: "1.0.0-beta.2", want: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left, leftOK := parseVersion(test.a)
+			right, rightOK := parseVersion(test.b)
+			if !leftOK || !rightOK {
+				t.Fatalf("parseVersion(%q, %q) = (%v, %v), both must parse", test.a, test.b, leftOK, rightOK)
+			}
+			got := sign(compareVersions(left, right))
+			if got != test.want {
+				t.Errorf("compareVersions(%q, %q) = %d, want %d", test.a, test.b, got, test.want)
+			}
+			if reversed := sign(compareVersions(right, left)); reversed != -test.want {
+				t.Errorf("compareVersions(%q, %q) = %d, want %d", test.b, test.a, reversed, -test.want)
+			}
+		})
+	}
+}
+
+func TestUpdateDoesNotDowngradeANewerBinary(t *testing.T) {
+	// A 2.0.0 binary must skip a v1.5.0 release: equality-only matching would
+	// redownload and replace it with an older binary.
+	server, downloads := newReleaseServer(t, "v1.5.0", nil)
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("current"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "2.0.0", Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Updated {
+		t.Fatalf("result = %+v, want a downgrade refusal", result)
+	}
+	if result.Next != "1.5.0" {
+		t.Errorf("result.Next = %q, want 1.5.0", result.Next)
+	}
+	if *downloads != 0 {
+		t.Errorf("downgrade run downloaded %d assets, want 0", *downloads)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "current" {
+		t.Errorf("binary changed: %q, %v", contents, err)
+	}
+}
+
+func TestUpdateTreatsVPrefixesTheSame(t *testing.T) {
+	// A release tagged "1.2.3" and an installed "v1.2.3" name the same version.
+	for _, test := range []struct {
+		name    string
+		current string
+		tag     string
+	}{
+		{name: "installed without v", current: "1.2.3", tag: "v1.2.3"},
+		{name: "installed with v", current: "v1.2.3", tag: "1.2.3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, downloads := newReleaseServer(t, test.tag, nil)
+			pointAPIAt(t, server)
+			target := filepath.Join(t.TempDir(), "shelf")
+			if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := Update(context.Background(), Options{CurrentVersion: test.current, Target: target})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Updated {
+				t.Fatalf("result = %+v, want an up-to-date short-circuit", result)
+			}
+			if *downloads != 0 {
+				t.Errorf("run downloaded %d assets, want 0", *downloads)
+			}
+		})
+	}
+}
+
+func TestUpdatePreservesASymlinkedTarget(t *testing.T) {
+	// Package managers install shelf through a symlink; an update must write
+	// through the link to the real binary, not replace the link itself.
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	directory := t.TempDir()
+	real := filepath.Join(directory, "shelf.real")
+	if err := os.WriteFile(real, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "shelf")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated {
+		t.Fatalf("result = %+v, want an update through the symlink", result)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("update replaced the symlink with a regular file")
+	}
+	if resolved, err := os.Readlink(link); err != nil || resolved != real {
+		t.Errorf("symlink now points at %q, %v, want %q", resolved, err, real)
+	}
+	if contents, err := os.ReadFile(real); err != nil || string(contents) != "new" {
+		t.Errorf("real binary = %q, %v, want the released binary", contents, err)
+	}
+}

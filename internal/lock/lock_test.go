@@ -752,3 +752,44 @@ func TestSelectedFilesExistCoversBothPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteSyncsFileAndDirectory(t *testing.T) {
+	// The write path syncs the temp file before the rename and the directory
+	// after it; this exercises that path including a full overwrite of a valid
+	// lock, and verifies no temp files are left behind.
+	path := filepath.Join(t.TempDir(), "plugins.lock")
+	for _, version := range []string{"first", "second"} {
+		if err := Write(path, LockedConfig{ConfigFingerprint: version, Shell: "zsh", Plugins: []LockedPlugin{{Name: "test", Source: "inline"}}}); err != nil {
+			t.Fatal(err)
+		}
+		reloaded, err := Read(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.ConfigFingerprint != version {
+			t.Fatalf("lock = %+v, want fingerprint %q", reloaded, version)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "plugins.lock" {
+		t.Fatalf("directory entries = %v, want only plugins.lock", entries)
+	}
+}
+
+func TestVerifyLockedInvalidatesWhenTemplatesChange(t *testing.T) {
+	templates := map[string]string{"source": "source \"{{ file }}\""}
+	locked := LockedConfig{ConfigFingerprint: "fingerprint", Shell: "zsh", Templates: templates}
+	ctx := Context{ConfigFingerprint: "fingerprint", Shell: "zsh", Templates: templates}
+	if !VerifyLocked(locked, ctx) {
+		t.Fatal("a lock with matching templates failed verification")
+	}
+	// A shelf upgrade that changes built-in templates must invalidate the lock
+	// even when profile, shell, and fingerprint are unchanged.
+	ctx.Templates = map[string]string{"source": "changed \"{{ file }}\""}
+	if VerifyLocked(locked, ctx) {
+		t.Fatal("a lock with stale templates verified")
+	}
+}

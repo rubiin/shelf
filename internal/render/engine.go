@@ -331,17 +331,40 @@ func tokenize(text string) ([]token, error) {
 		if text[start+1] == '%' {
 			kind, closing = tokenBlock, "%}"
 		}
-		end := strings.Index(text[start+2:], closing)
+		end := findTagEnd(text, start+2, closing)
 		if end < 0 {
 			return nil, fmt.Errorf("unclosed tag %q", text[start:])
 		}
-		tokens = append(tokens, token{kind: kind, text: strings.TrimSpace(text[start+2 : start+2+end])})
-		text = text[start+2+end+len(closing):]
+		tokens = append(tokens, token{kind: kind, text: strings.TrimSpace(text[start+2 : end])})
+		text = text[end+len(closing):]
 	}
 	if text != "" {
 		tokens = append(tokens, token{kind: tokenText, text: text})
 	}
 	return tokens, nil
+}
+
+// findTagEnd scans forward from the tag body and returns the closing delimiter's index,
+// skipping string literals so a "}}" or "%}" inside a quoted value does not end the tag.
+func findTagEnd(text string, index int, closing string) int {
+	var quote byte
+	for index < len(text) {
+		switch {
+		case quote != 0:
+			switch text[index] {
+			case '\\':
+				index++
+			case quote:
+				quote = 0
+			}
+		case text[index] == '"' || text[index] == '\'':
+			quote = text[index]
+		case strings.HasPrefix(text[index:], closing):
+			return index
+		}
+		index++
+	}
+	return -1
 }
 
 type parser struct {
@@ -380,6 +403,9 @@ func (p *parser) parseNodes() ([]node, string, error) {
 			keyword, rest := splitTag(current.text)
 			switch keyword {
 			case "if":
+				if rest == "" {
+					return nil, "", fmt.Errorf("if block needs a condition")
+				}
 				branch, err := p.parseIf(rest)
 				if err != nil {
 					return nil, "", err
@@ -417,7 +443,11 @@ func (p *parser) parseIf(condition string) (node, error) {
 			current = ""
 		case strings.HasPrefix(terminator, "else if"):
 			_, rest := splitTag(terminator)
-			current = strings.TrimSpace(strings.TrimPrefix(rest, "if"))
+			next := strings.TrimSpace(strings.TrimPrefix(rest, "if"))
+			if next == "" {
+				return nil, fmt.Errorf("if block needs a condition")
+			}
+			current = next
 		default:
 			return nil, fmt.Errorf("unclosed if block")
 		}
@@ -794,9 +824,33 @@ func applyFilter(text string, value templateValue) (templateValue, error) {
 	switch strings.TrimSpace(name) {
 	case "nl":
 		return newlineValue(value), nil
+	case "dquote":
+		printed, err := value.print()
+		if err != nil {
+			return templateValue{}, err
+		}
+		return textValue(escapeDQuotes(printed)), nil
 	default:
 		return templateValue{}, fmt.Errorf("unknown template filter %q", strings.TrimSpace(name))
 	}
+}
+
+// escapeDQuotes escapes the characters the shell expands inside double quotes, so a value
+// holding $, `, \, or " still yields the exact same literal text when it reaches the shell.
+func escapeDQuotes(text string) string {
+	if !strings.ContainsAny(text, "\\$`\"") {
+		return text
+	}
+	var output strings.Builder
+	output.Grow(len(text) + 8)
+	for _, character := range text {
+		switch character {
+		case '\\', '$', '`', '"':
+			output.WriteByte('\\')
+		}
+		output.WriteRune(character)
+	}
+	return output.String()
 }
 
 // newlineValue adds a newline only if one is missing.

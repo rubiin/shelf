@@ -81,16 +81,23 @@ func writeAtomically(path string, contents []byte) error {
 	return os.Rename(temporaryName, path)
 }
 
-// Remove deletes a plugin declared as a table, dotted key, or quoted name.
+// Remove deletes a plugin declared as a table, dotted key, inline table, or quoted name.
 func Remove(path, name string) error {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
+	// The line scanner below relies on well-formed TOML (brackets balance, arrays
+	// close). Refuse to edit a config that does not decode instead of dropping
+	// lines after a bracket that never closes.
+	if _, err := decode(contents); err != nil {
+		return fmt.Errorf("remove plugin %q: config is invalid: %w", name, err)
+	}
 	removed := false
 	inside := false
 	root := true
-	depth := 0 // unmatched [ while dropping a multi-line dotted-key value
+	pluginsTable := false // inside [plugins], where plugins can be inline tables
+	depth := 0            // unmatched [ while dropping a multi-line dotted-key value
 	lines := strings.Split(string(contents), "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -107,6 +114,7 @@ func Remove(path, name string) error {
 		case header != "":
 			// After a header, dotted keys belong to that table, not top-level plugins.
 			root = false
+			pluginsTable = header == "[plugins]"
 			inside = isPluginTable(header, name)
 			if inside {
 				removed = true
@@ -115,6 +123,9 @@ func Remove(path, name string) error {
 		case root && !inside && isDottedPluginKey(line, name):
 			removed = true
 			depth = countBrackets(line)
+			continue
+		case pluginsTable && !inside && isInlineTablePluginKey(line, name):
+			removed = true
 			continue
 		}
 		if inside {
@@ -169,14 +180,51 @@ func countBrackets(line string) int {
 	return opens - closes
 }
 
-// normalizeTableHeader strips spaces and quotes from a header, or "" for other lines.
+// normalizeTableHeader strips spaces, quotes, and a trailing comment from a
+// header, or "" for other lines.
 func normalizeTableHeader(line string) string {
 	trimmed := strings.TrimSpace(line)
-	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' || strings.HasPrefix(trimmed, "[[") {
+	if len(trimmed) < 2 || trimmed[0] != '[' || strings.HasPrefix(trimmed, "[[") {
+		return ""
+	}
+	trimmed = strings.TrimSpace(stripTrailingComment(trimmed))
+	if !strings.HasSuffix(trimmed, "]") {
 		return ""
 	}
 	removed := strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")
 	return removed.Replace(trimmed)
+}
+
+// stripTrailingComment removes a TOML comment (# ...), ignoring # inside quoted keys.
+func stripTrailingComment(line string) string {
+	var quote byte
+	escaped := false
+	for index := 0; index < len(line); index++ {
+		character := line[index]
+		switch {
+		case quote == '"':
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == '"' {
+				quote = 0
+			}
+		case quote == '\'':
+			if character == '\'' {
+				quote = 0
+			}
+		case character == '"' || character == '\'':
+			quote = character
+		case character == '#':
+			return line[:index]
+		}
+	}
+	return line
 }
 
 // isPluginTable matches the plugin's table and its subtables.
@@ -194,6 +242,20 @@ func isDottedPluginKey(line, name string) bool {
 	}
 	key := strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "").Replace(trimmed[:assignment])
 	return strings.HasPrefix(key, "plugins."+name+".")
+}
+
+// isInlineTablePluginKey matches a `name = { ... }` plugin declaration inside [plugins].
+func isInlineTablePluginKey(line, name string) bool {
+	trimmed := strings.TrimSpace(line)
+	assignment := strings.Index(trimmed, "=")
+	if assignment < 0 {
+		return false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(trimmed[assignment+1:]), "{") {
+		return false
+	}
+	key := strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "").Replace(trimmed[:assignment])
+	return key == name
 }
 
 func encodePlugin(name string, plugin RawPlugin) string {
