@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -62,6 +63,9 @@ func NewRoot() *cobra.Command {
 		Short:         "Modern, fast, configurable shell plugin manager for both bash and zsh",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(*cobra.Command, []string) error {
+			return validateBoolEnvironment()
+		},
 	}
 	command.SetOut(os.Stdout)
 	command.SetErr(os.Stderr)
@@ -413,7 +417,10 @@ func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) 
 		return sourceInputs{}, err
 	}
 	baseFingerprint := fingerprint
-	fingerprint = fingerprintWithRevision(baseFingerprint, paths.RevisionLockFile(profile))
+	fingerprint, err = fingerprintWithRevision(baseFingerprint, paths.RevisionLockFile(profile))
+	if err != nil {
+		return sourceInputs{}, err
+	}
 	shell, err := resolveShell(cfg)
 	if err != nil {
 		return sourceInputs{}, err
@@ -449,12 +456,17 @@ func fingerprintWithShell(contents []byte) string {
 	return lock.Fingerprint([]byte(lock.Fingerprint(contents) + "\n" + os.Getenv("SHELF_SHELL")))
 }
 
-func fingerprintWithRevision(fingerprint, revisionPath string) string {
+// fingerprintWithRevision mixes in the revision manifest; only a missing manifest is
+// omitted, so an unreadable one fails instead of silently dropping its pins.
+func fingerprintWithRevision(fingerprint, revisionPath string) (string, error) {
 	contents, err := os.ReadFile(revisionPath)
-	if err != nil {
-		return lock.Fingerprint([]byte(fingerprint + "\n"))
+	if errors.Is(err, os.ErrNotExist) {
+		return lock.Fingerprint([]byte(fingerprint + "\n")), nil
 	}
-	return lock.Fingerprint([]byte(fingerprint + "\n" + lock.Fingerprint(contents)))
+	if err != nil {
+		return "", fmt.Errorf("read revision manifest %s: %w", revisionPath, err)
+	}
+	return lock.Fingerprint([]byte(fingerprint + "\n" + lock.Fingerprint(contents))), nil
 }
 
 // unlockedLock verifies the lock against raw config bytes, skipping a config decode. This is the shell-startup path.
@@ -467,9 +479,14 @@ func unlockedLock(paths Paths, lockPath string) (lock.LockedConfig, bool) {
 	if err != nil {
 		return lock.LockedConfig{}, false
 	}
+	// An unreadable manifest takes the slow path, which reports the error.
+	fingerprint, err := fingerprintWithRevision(fingerprintWithShell(contents), paths.RevisionLockFile(profile))
+	if err != nil {
+		return lock.LockedConfig{}, false
+	}
 	read := lock.Context{
 		ConfigFile:        paths.ConfigFile,
-		ConfigFingerprint: fingerprintWithRevision(fingerprintWithShell(contents), paths.RevisionLockFile(profile)),
+		ConfigFingerprint: fingerprint,
 		DataDirectory:     paths.DataDirectory,
 		Profile:           profile,
 		Shell:             locked.Shell,
@@ -522,12 +539,15 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err := lock.WriteRevisionManifest(revisionPath, lock.RevisionManifestFrom(locked)); err != nil {
 		return err
 	}
-	locked.ConfigFingerprint = fingerprintWithRevision(fingerprint, revisionPath)
+	locked.ConfigFingerprint, err = fingerprintWithRevision(fingerprint, revisionPath)
+	if err != nil {
+		return err
+	}
 	lockPath := paths.LockFile(profile)
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
-	log.header("Locked", fmt.Sprintf("%d plugins %s", len(plugins), log.dim(displayPath(lockPath))))
+	log.header("Locked", fmt.Sprintf("%d plugins %s", len(locked.Plugins), log.dim(displayPath(lockPath))))
 	return nil
 }
 
@@ -638,20 +658,21 @@ func splitEditorCommand(value string) ([]string, error) {
 func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode lock.Mode, concurrency int) error {
 	lockPath := paths.LockFile(profile)
 	log := newLogger(diagnostics)
+	unlocked := func(locked lock.LockedConfig) {
+		log.verboseHeader("Unlocked", displayPath(lockPath))
+		if locked.ProfileMatch == "unmatched" {
+			log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
+		}
+	}
 	if !force {
 		guard, err := filelock.Acquire(paths.ConfigDirectory, false, styledLines(diagnostics, ansiWarningColor))
 		if err != nil {
 			return err
 		}
-		if locked, valid := unlockedLock(paths, lockPath); valid {
+		// Concurrent shell startups share this lock, so it must not cover git writes.
+		if locked, valid := unlockedLock(paths, lockPath); valid && !lock.NeedsRestore(locked, paths.DataDirectory, concurrency) {
 			defer func() { _ = guard.Release() }()
-			log.verboseHeader("Unlocked", displayPath(lockPath))
-			if locked.ProfileMatch == "unmatched" {
-				log.warning("Warning", fmt.Sprintf("profile %q matches no plugins", profile))
-			}
-			if err := lock.Restore(locked, source.NewInstaller(paths.DataDirectory), concurrency); err != nil {
-				return err
-			}
+			unlocked(locked)
 			return renderScript(output, locked, diagnostics)
 		}
 		if err := guard.Release(); err != nil {
@@ -663,7 +684,16 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 		return err
 	}
 	defer func() { _ = guard.Release() }()
-	// Another process may have relocked while we waited.
+	// Another process may have relocked or restored while we waited.
+	if !force {
+		if locked, valid := unlockedLock(paths, lockPath); valid {
+			unlocked(locked)
+			if err := lock.Restore(locked, source.NewInstaller(paths.DataDirectory), concurrency); err != nil {
+				return err
+			}
+			return renderScript(output, locked, diagnostics)
+		}
+	}
 	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
@@ -686,7 +716,10 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	if err := lock.WriteRevisionManifest(revisionPath, lock.RevisionManifestFrom(locked)); err != nil {
 		return err
 	}
-	locked.ConfigFingerprint = fingerprintWithRevision(inputs.BaseFingerprint, revisionPath)
+	locked.ConfigFingerprint, err = fingerprintWithRevision(inputs.BaseFingerprint, revisionPath)
+	if err != nil {
+		return err
+	}
 	if err := lock.Write(lockPath, locked); err != nil {
 		return err
 	}
@@ -712,6 +745,18 @@ func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) 
 	}
 	locked, err := lock.BuildWithConcurrency(inputs.Context, inputs.Config, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
 	if err != nil {
+		return err
+	}
+	// Persist the new revisions; otherwise the next fast-path source restores the old pins.
+	revisionPath := paths.RevisionLockFile(profile)
+	if err := lock.WriteRevisionManifest(revisionPath, lock.RevisionManifestFrom(locked)); err != nil {
+		return err
+	}
+	locked.ConfigFingerprint, err = fingerprintWithRevision(inputs.BaseFingerprint, revisionPath)
+	if err != nil {
+		return err
+	}
+	if err := lock.Write(paths.LockFile(profile), locked); err != nil {
 		return err
 	}
 	return renderScript(output, locked, diagnostics)
@@ -947,7 +992,10 @@ func pluginStatus(paths Paths, output io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	fingerprint = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
+	fingerprint, err = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
+	if err != nil {
+		return err
+	}
 	shell, err := resolveShell(cfg)
 	if err != nil {
 		return err
@@ -1024,7 +1072,10 @@ func doctor(paths Paths, output io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	fingerprint = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
+	fingerprint, err = fingerprintWithRevision(fingerprint, paths.RevisionLockFile(profile))
+	if err != nil {
+		return err
+	}
 	outColors := writerColors(output)
 	if _, err := fmt.Fprintf(output, "%s  %s\n", outColors.header(fmt.Sprintf("%-8s", "version:")), "shelf "+Version); err != nil {
 		return err
@@ -1089,7 +1140,7 @@ func shellVersion(shellPath string) (string, error) {
 
 func usesGit(cfg config.Config) bool {
 	for _, plugin := range cfg.Plugins {
-		if plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" {
+		if lock.IsGit(plugin) {
 			return true
 		}
 	}
@@ -1298,7 +1349,36 @@ func envString(name, fallback string) string {
 	return fallback
 }
 
-func envBool(name string) bool { return os.Getenv(name) == "1" || os.Getenv(name) == "true" }
+// boolEnvironment lists the SHELF_* booleans that seed persistent flags.
+var boolEnvironment = []string{"SHELF_QUIET", "SHELF_NON_INTERACTIVE", "SHELF_VERBOSE"}
+
+// parseEnvBool accepts strconv.ParseBool spellings with surrounding whitespace; unset or empty is false.
+func parseEnvBool(name string) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q is not a boolean (use 1/0 or true/false)", name, os.Getenv(name))
+	}
+	return parsed, nil
+}
+
+// envBool seeds a flag default; an invalid value is rejected by validateBoolEnvironment before any command runs.
+func envBool(name string) bool {
+	value, _ := parseEnvBool(name)
+	return value
+}
+
+func validateBoolEnvironment() error {
+	for _, name := range boolEnvironment {
+		if _, err := parseEnvBool(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func homeDir() string {
 	if home := os.Getenv("HOME"); home != "" {

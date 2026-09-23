@@ -5,6 +5,9 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -377,4 +380,78 @@ func TestSelectRestoresTerminalOnPanic(t *testing.T) {
 		Restore:    terminal.Restore,
 		IsTerminal: func(int) bool { return true },
 	})
+}
+
+// lockedBuffer lets the test poll picker output while Select writes it from another goroutine.
+type lockedBuffer struct {
+	mutex sync.Mutex
+	bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *lockedBuffer) Len() int {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.Buffer.Len()
+}
+
+func TestSelectRestoresTerminalBeforeAFatalSignal(t *testing.T) {
+	reraised := make(chan os.Signal, 1)
+	restoredFirst := make(chan bool, 1)
+	var restored atomic.Bool
+	original := reraise
+	reraise = func(sig os.Signal) {
+		restoredFirst <- restored.Load()
+		reraised <- sig
+	}
+	t.Cleanup(func() { reraise = original })
+
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = readPipe.Close() }()
+	output := &lockedBuffer{}
+	finished := make(chan error, 1)
+	go func() {
+		_, err := Select([]string{"alpha"}, IO{
+			In:         readPipe,
+			Out:        output,
+			MakeRaw:    func(int) (*term.State, error) { return &term.State{}, nil },
+			Restore:    func(int, *term.State) error { restored.Store(true); return nil },
+			IsTerminal: func(int) bool { return true },
+		})
+		finished <- err
+	}()
+	// The first render happens after the guard is installed.
+	deadline := time.Now().Add(2 * time.Second)
+	for output.Len() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("picker never rendered")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sig := <-reraised:
+		if sig != syscall.SIGHUP {
+			t.Fatalf("reraised %v, want SIGHUP", sig)
+		}
+		if !<-restoredFirst {
+			t.Fatal("signal re-raised before the terminal was restored")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SIGHUP during the blocking read was not handled")
+	}
+	_ = writePipe.Close()
+	if err := <-finished; err == nil {
+		t.Fatal("Select succeeded after its input closed")
+	}
 }

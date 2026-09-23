@@ -428,8 +428,8 @@ $XDG_CONFIG_HOME/shelf/plugins.<profile>.lock
 It holds only Git-based plugin names and resolved revisions, so commit it with
 `config.toml` for reproducible versions. When present, `shelf lock`,
 `shelf lock --reinstall`, and `shelf source --relock` use its revisions;
-`shelf lock --update` and `shelf update --lock` fetch current ones and refresh
-the manifest. Local, remote, and inline plugins are intentionally omitted.
+`shelf lock --update`, `shelf update`, and `shelf update --lock` fetch current
+ones and refresh the manifest. Local, remote, and inline plugins are intentionally omitted.
 
 The runtime lock under the data directory is not meant for version control:
 commit the revision manifest instead.
@@ -440,7 +440,7 @@ with status 2.
 
 ## Examples
 
-Update plugin sources:
+Update plugin sources, write the refreshed lockfile, and print shell code:
 
 ```sh
 shelf update

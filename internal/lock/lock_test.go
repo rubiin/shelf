@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -791,5 +792,44 @@ func TestVerifyLockedInvalidatesWhenTemplatesChange(t *testing.T) {
 	ctx.Templates = map[string]string{"source": "changed \"{{ file }}\""}
 	if VerifyLocked(locked, ctx) {
 		t.Fatal("a lock with stale templates verified")
+	}
+}
+
+func TestNeedsRestoreComparesCheckoutsWithTheLock(t *testing.T) {
+	repository := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		output, err := exec.Command("git", append([]string{"-C", repository}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	run("init", "-q")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Shelf Tests")
+	run("commit", "-q", "--allow-empty", "-m", "first")
+	first := run("rev-parse", "HEAD")
+	run("commit", "-q", "--allow-empty", "-m", "second")
+	second := run("rev-parse", "HEAD")
+
+	dataDir := t.TempDir()
+	url := "file://" + repository
+	missing := LockedConfig{Plugins: []LockedPlugin{{Name: "demo", URL: url, Rev: second}}}
+	if !NeedsRestore(missing, dataDir, DefaultConcurrency) {
+		t.Fatal("NeedsRestore = false for a checkout that does not exist")
+	}
+	if _, err := source.NewInstaller(dataDir).Install(context.Background(), source.Request{Name: "demo", Git: url}); err != nil {
+		t.Fatal(err)
+	}
+	if NeedsRestore(missing, dataDir, DefaultConcurrency) {
+		t.Fatal("NeedsRestore = true for a checkout already at the locked revision")
+	}
+	drifted := LockedConfig{Plugins: []LockedPlugin{{Name: "demo", URL: url, Rev: first}}}
+	if !NeedsRestore(drifted, dataDir, DefaultConcurrency) {
+		t.Fatal("NeedsRestore = false for a checkout off its locked revision")
+	}
+	if NeedsRestore(LockedConfig{Plugins: []LockedPlugin{{Name: "inline"}, {Name: "remote", Rev: "x"}}}, dataDir, DefaultConcurrency) {
+		t.Fatal("NeedsRestore = true for plugins Restore skips")
 	}
 }

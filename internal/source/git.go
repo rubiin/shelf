@@ -13,7 +13,7 @@ import (
 
 func installGit(ctx context.Context, directory string, request Request) (Installed, error) {
 	repositoryURL := gitURL(request)
-	if request.Git == "" && request.GitHub == "" && request.Gist == "" {
+	if !hasGitSource(request) {
 		return Installed{}, fmt.Errorf("git source is empty")
 	}
 	ref := request.Ref
@@ -30,12 +30,14 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 	}
 	gitDir := filepath.Join(directory, ".git")
 	_, statErr := os.Stat(gitDir)
+	fetched := false
 	switch {
 	case statErr == nil:
 		if request.Update && !request.Frozen {
 			if err := runGitIn(ctx, directory, "fetch", "--all", "--tags"); err != nil {
 				return Installed{}, err
 			}
+			fetched = true
 		}
 	case errors.Is(statErr, os.ErrNotExist):
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
@@ -69,13 +71,23 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		return Installed{}, fmt.Errorf("check existing clone at %s: %w", gitDir, statErr)
 	}
 	if ref != "" {
-		// A shallow clone may not hold the pinned revision; fetch the object first.
-		if err := runGitIn(ctx, directory, "cat-file", "-e", ref+"^{commit}"); err != nil {
+		// fetch only moves refs/remotes/origin/*; a branch ref must follow that tip,
+		// not the local branch the clone created, or an update keeps the old commit.
+		target := ref
+		if remoteBranch := "refs/remotes/origin/" + ref; gitHasRef(ctx, directory, remoteBranch) {
+			target = remoteBranch
+		} else if err := runGitIn(ctx, directory, "cat-file", "-e", ref+"^{commit}"); err != nil {
+			// A shallow clone may not hold the pinned revision; fetch the object first.
 			if err := runGitIn(ctx, directory, "fetch", "--depth", "1", "origin", ref); err != nil {
 				return Installed{}, err
 			}
 		}
-		if err := runGitIn(ctx, directory, "checkout", "--detach", ref); err != nil {
+		if err := runGitIn(ctx, directory, "checkout", "--detach", target); err != nil {
+			return Installed{}, err
+		}
+	} else if fetched && gitHasRef(ctx, directory, "refs/remotes/origin/HEAD") {
+		// An unpinned update tracks the remote default branch.
+		if err := runGitIn(ctx, directory, "checkout", "--detach", "refs/remotes/origin/HEAD"); err != nil {
 			return Installed{}, err
 		}
 	}
@@ -88,6 +100,28 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		return Installed{}, err
 	}
 	return Installed{Directory: sourceDir, Root: directory, Revision: strings.TrimSpace(revision)}, nil
+}
+
+// CheckedOutRevision reads the clone's HEAD without writing to the repository, so it
+// is safe under a shared lock.
+func CheckedOutRevision(ctx context.Context, dataDir string, request Request) (string, error) {
+	directory, err := GitDirectory(dataDir, request)
+	if err != nil {
+		return "", err
+	}
+	revision, err := gitOutputIn(ctx, directory, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(revision), nil
+}
+
+func hasGitSource(request Request) bool {
+	return request.Git != "" || request.GitHub != "" || request.Gist != "" || request.GitLab != "" || request.Bitbucket != "" || request.Codeberg != ""
+}
+
+func gitHasRef(ctx context.Context, directory, ref string) bool {
+	return runGitIn(ctx, directory, "rev-parse", "--verify", "--quiet", ref+"^{commit}") == nil
 }
 
 func runGit(ctx context.Context, args ...string) error {

@@ -1009,3 +1009,87 @@ func TestInstallerRejectsEmptyRemoteBody(t *testing.T) {
 		t.Fatalf("installed file = %q, want the untouched previous download", contents)
 	}
 }
+
+func TestInstallerAcceptsForgeOnlyGitSources(t *testing.T) {
+	// Only the empty-source guard is under test: a forge-only request must reach the
+	// clone step, so the error is the clone failure, not "git source is empty".
+	for _, request := range []Request{
+		{Name: "gitlab", GitLab: "owner/repo"},
+		{Name: "bitbucket", Bitbucket: "owner/repo"},
+		{Name: "codeberg", Codeberg: "owner/repo"},
+	} {
+		t.Run(request.Name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err := installGit(ctx, filepath.Join(t.TempDir(), "clone"), request)
+			if err == nil {
+				t.Fatal("clone of a cancelled request succeeded")
+			}
+			if strings.Contains(err.Error(), "git source is empty") {
+				t.Fatalf("forge-only source rejected as empty: %v", err)
+			}
+		})
+	}
+	if _, err := installGit(context.Background(), filepath.Join(t.TempDir(), "clone"), Request{Name: "empty"}); err == nil || !strings.Contains(err.Error(), "git source is empty") {
+		t.Fatalf("empty source error = %v, want git source is empty", err)
+	}
+}
+
+func TestInstallerUpdateAdvancesBranchAndDefaultBranchPlugins(t *testing.T) {
+	repository := t.TempDir()
+	first := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	if output, err := exec.Command("git", "-C", repository, "branch", "featured").CombinedOutput(); err != nil {
+		t.Fatalf("git branch featured: %v\n%s", err, output)
+	}
+	sourceURL := "file://" + repository
+	tests := []struct {
+		name    string
+		request Request
+		advance func() string
+	}{
+		{name: "default branch", request: Request{Name: "default", Git: sourceURL}, advance: func() string {
+			return commitFile(t, repository, "plugin.zsh", "echo default-next\n")
+		}},
+		{name: "branch", request: Request{Name: "branch", Git: sourceURL, Branch: "featured"}, advance: func() string {
+			if output, err := exec.Command("git", "-C", repository, "checkout", "-q", "featured").CombinedOutput(); err != nil {
+				t.Fatalf("git checkout featured: %v\n%s", err, output)
+			}
+			tip := commitFile(t, repository, "plugin.zsh", "echo featured-next\n")
+			if output, err := exec.Command("git", "-C", repository, "checkout", "-q", "-").CombinedOutput(); err != nil {
+				t.Fatalf("git checkout -: %v\n%s", err, output)
+			}
+			return tip
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+			installed, err := installer.Install(context.Background(), test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := installed.Revision
+			if test.name == "branch" && before != first {
+				t.Fatalf("initial revision = %q, want %q", before, first)
+			}
+			tip := test.advance()
+			update := test.request
+			update.Update = true
+			installed, err = installer.Install(context.Background(), update)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if installed.Revision != tip {
+				t.Fatalf("updated revision = %q, want the new upstream tip %q (was %q)", installed.Revision, tip, before)
+			}
+			// A later non-update install must keep the fetched tip, not fall back to the stale local branch.
+			installed, err = installer.Install(context.Background(), test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if installed.Revision != tip {
+				t.Fatalf("reinstall revision = %q, want %q", installed.Revision, tip)
+			}
+		})
+	}
+}

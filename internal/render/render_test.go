@@ -876,3 +876,36 @@ func TestExpressionPlansMatchTheFullEvaluator(t *testing.T) {
 		}
 	}
 }
+
+// TestScriptDeferRearmsForASecondSourceInTheSameSession walks the scheduler through two
+// full arm/setup/idle cycles in one zsh, as a second `shelf source` in an interactive
+// session would: the second batch must re-arm the precmd hook and fd and then drain.
+func TestScriptDeferRearmsForASecondSourceInTheSameSession(t *testing.T) {
+	directory := t.TempDir()
+	render := func(name string) string {
+		t.Helper()
+		file := filepath.Join(directory, name+".zsh")
+		if err := os.WriteFile(file, []byte("print -r -- "+name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{Name: name, Files: []string{file}, Apply: []string{"defer"}}}}, "zsh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return script
+	}
+	// One cycle: the prompt runs the precmd hook, then zle goes idle and calls the handler.
+	cycle := `(( ${+_shelf_defer_fd} )) || print -r -- unarmed
+[[ -n ${precmd_functions[(r)_shelf_defer_setup]} ]] || print -r -- no-hook
+_shelf_defer_setup
+_shelf_defer_idle
+`
+	command := `set -u; eval "$1"` + "\n" + cycle + `eval "$2"` + "\n" + cycle
+	output, err := exec.Command("zsh", "-fc", command, "shelf-test", render("first"), render("second")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "first\nsecond\n" {
+		t.Fatalf("zsh output = %q, want %q", output, "first\nsecond\n")
+	}
+}

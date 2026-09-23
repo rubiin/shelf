@@ -227,16 +227,41 @@ func runBuild(ctx context.Context, diagnostics io.Writer, name string, installed
 	return nil
 }
 
-// Restore reinstalls the pinned revisions using only the lock.
-func Restore(locked LockedConfig, installer source.Installer, concurrency int) error {
+// restorable lists the git plugins Restore acts on; only git sources record a URL, and
+// older locks without one are skipped.
+func restorable(locked LockedConfig) []LockedPlugin {
 	var tasks []LockedPlugin
 	for _, plugin := range locked.Plugins {
-		// Only git sources record a URL; older locks without one are skipped.
 		if plugin.Rev == "" || plugin.URL == "" {
 			continue
 		}
 		tasks = append(tasks, plugin)
 	}
+	return tasks
+}
+
+// NeedsRestore reports whether any locked git checkout is missing or off its pinned
+// revision. It only reads the clones, so callers can run it under a shared lock and
+// take the exclusive lock just for Restore, which writes to them.
+func NeedsRestore(locked LockedConfig, dataDir string, concurrency int) bool {
+	tasks := restorable(locked)
+	err := RunConcurrently(context.Background(), len(tasks), concurrency, func(ctx context.Context, index int) error {
+		plugin := tasks[index]
+		revision, err := source.CheckedOutRevision(ctx, dataDir, source.Request{Git: plugin.URL})
+		if err != nil {
+			return err
+		}
+		if revision != plugin.Rev {
+			return fmt.Errorf("plugin %q is at %q, want %q", plugin.Name, revision, plugin.Rev)
+		}
+		return nil
+	})
+	return err != nil
+}
+
+// Restore reinstalls the pinned revisions using only the lock.
+func Restore(locked LockedConfig, installer source.Installer, concurrency int) error {
+	tasks := restorable(locked)
 	return RunConcurrently(context.Background(), len(tasks), concurrency, func(installContext context.Context, index int) error {
 		plugin := tasks[index]
 		if _, err := installer.Install(installContext, source.Request{Name: plugin.Name, Git: plugin.URL, Ref: plugin.Rev, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth}); err != nil {
@@ -265,13 +290,14 @@ func pluginSource(plugin config.RawPlugin) string {
 	}
 }
 
-func isGit(plugin config.RawPlugin) bool {
+// IsGit reports whether the plugin is cloned from any git forge.
+func IsGit(plugin config.RawPlugin) bool {
 	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }
 
 // pluginCloneURL resolves the clone URL recorded in the lock, so Restore needs no config.
 func pluginCloneURL(plugin config.RawPlugin) string {
-	if !isGit(plugin) {
+	if !IsGit(plugin) {
 		return ""
 	}
 	return source.CloneURL(source.Request{Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto})

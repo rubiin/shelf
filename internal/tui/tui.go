@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -86,14 +88,11 @@ func Select(options []string, io IO) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("interactive selection requires a terminal: %w", err)
 	}
-	// A panic anywhere in the picker must not leave the terminal raw; restore
-	// the previous mode before the panic keeps unwinding.
-	defer func() {
-		if r := recover(); r != nil {
-			_ = io.Restore(int(fd), state)
-			panic(r)
-		}
-	}()
+	// Every exit, including a panic or a fatal signal during the blocking read,
+	// must restore the previous mode; the first restore's result is kept.
+	restore := sync.OnceValue(func() error { return io.Restore(int(fd), state) })
+	defer func() { _ = restore() }()
+	defer guardSignals(restore)()
 	checked := make([]bool, len(options))
 	cursor := 0
 	outFd := os.Stdout.Fd()
@@ -105,12 +104,46 @@ func Select(options []string, io IO) ([]string, error) {
 	selection, loopErr := readKeys(io.In, options, checked, &cursor, func() {
 		render(io.Out, options, checked, cursor, true, io.Color, width)
 	})
-	restoreErr := io.Restore(int(fd), state)
+	restoreErr := restore()
 	_, _ = fmt.Fprint(io.Out, "\r\n")
 	if loopErr != nil {
 		return nil, errors.Join(loopErr, restoreErr)
 	}
 	return selection, restoreErr
+}
+
+// fatalSignals end the process by default; ctrl+c arrives as a key in raw mode, but
+// SIGINT is still caught in case it comes from outside the terminal.
+var fatalSignals = []os.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM}
+
+// reraise restores the default disposition and re-sends sig so the process exits with
+// the status the signal would have produced. A var so tests can observe it.
+var reraise = func(sig os.Signal) {
+	signal.Reset(sig)
+	if unixSignal, ok := sig.(syscall.Signal); ok {
+		_ = syscall.Kill(os.Getpid(), unixSignal)
+	}
+}
+
+// guardSignals restores the terminal before a fatal signal terminates the process.
+// The returned stop function ends the guard.
+func guardSignals(restore func() error) func() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, fatalSignals...)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case sig := <-signals:
+			_ = restore()
+			signal.Stop(signals)
+			reraise(sig)
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(signals)
+		close(done)
+	}
 }
 
 func readKeys(in io.Reader, options []string, checked []bool, cursor *int, redraw func()) ([]string, error) {

@@ -303,3 +303,17 @@ func TestSelfUpdatePassesForce(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUsesGitCoversEveryForge(t *testing.T) {
+	for name, plugin := range map[string]config.RawPlugin{
+		"git": {Git: "https://example.com/repo"}, "github": {GitHub: "owner/repo"}, "gist": {Gist: "id"},
+		"gitlab": {GitLab: "owner/repo"}, "bitbucket": {Bitbucket: "owner/repo"}, "codeberg": {Codeberg: "owner/repo"},
+	} {
+		if !usesGit(config.Config{Plugins: map[string]config.RawPlugin{name: plugin}}) {
+			t.Errorf("usesGit ignored a %s-only plugin", name)
+		}
+	}
+	if usesGit(config.Config{Plugins: map[string]config.RawPlugin{"local": {Local: "/tmp"}}}) {
+		t.Error("usesGit reported git for a local-only config")
+	}
+}

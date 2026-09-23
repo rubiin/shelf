@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"shelf/internal/config"
+	"shelf/internal/filelock"
 	"shelf/internal/lock"
 	"shelf/internal/source"
 	"shelf/internal/tui"
@@ -173,7 +174,9 @@ func TestSourceLeavesNoStrayLockFile(t *testing.T) {
 	}
 }
 
-func TestUpdateEmitsSourceWithoutWritingLockfile(t *testing.T) {
+// TestUpdateEmitsSourceAndPersistsLockfile guards the fix where bare update left the old
+// lock on disk, so the next fast-path source restored the pre-update revisions.
+func TestUpdateEmitsSourceAndPersistsLockfile(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -194,8 +197,8 @@ func TestUpdateEmitsSourceWithoutWritingLockfile(t *testing.T) {
 	if !strings.Contains(output.String(), "echo updated") {
 		t.Fatalf("update output = %q", output.String())
 	}
-	if _, err := os.Stat(filepath.Join(directory, "data", "plugins.lock")); !os.IsNotExist(err) {
-		t.Fatalf("update wrote lock file: %v", err)
+	if _, err := os.Stat(filepath.Join(directory, "data", "plugins.lock")); err != nil {
+		t.Fatalf("update did not persist the lock file: %v", err)
 	}
 }
 
@@ -1946,8 +1949,12 @@ func TestSourceRendersFromTheLockWithoutParsingTheConfig(t *testing.T) {
 	t.Setenv("SHELF_CONFIG_FILE", configFile)
 	t.Setenv("SHELF_DATA_DIR", dataDir)
 
+	fingerprint, err := fingerprintWithRevision(fingerprintWithShell(contents), filepath.Join(configDir, "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	locked := lock.LockedConfig{
-		ConfigFingerprint: fingerprintWithRevision(fingerprintWithShell(contents), filepath.Join(configDir, "plugins.lock")),
+		ConfigFingerprint: fingerprint,
 		Shell:             "zsh",
 		Templates:         map[string]string{"source": "source \"{{ files.0 }}\"\n"},
 		Plugins:           []lock.LockedPlugin{{Name: "demo", Inline: "echo demo"}},
@@ -2303,5 +2310,184 @@ func TestVersionIsNotACommand(t *testing.T) {
 	err := Execute([]string{"version"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("`shelf version` still runs as a subcommand; it should be a --version flag")
+	}
+}
+
+func TestUpdateSticksAcrossTheNextFastPathSource(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCommit(t, repository, "plugin.zsh", "echo first\n")
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ngit = \"file://"+repository+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(directory, "data")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	next := gitCommit(t, repository, "plugin.zsh", "echo second\n")
+	if err := Execute([]string{"update"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Execute([]string{"source"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := source.GitDirectory(dataDir, source.Request{Git: "file://" + repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := exec.Command("git", "-C", checkout, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(head)); got != next {
+		t.Fatalf("after update + source, checkout HEAD = %q, want the updated revision %q", got, next)
+	}
+}
+
+// TestSourceRestoresOnlyUnderTheExclusiveLock holds a shared config lock, as a concurrent
+// shell startup would: an up-to-date fast path still renders, but a restore, which writes
+// to the clone, must wait for exclusive access instead of racing the other process.
+func TestSourceRestoresOnlyUnderTheExclusiveLock(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCommit(t, repository, "plugin.zsh", "echo first\n")
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ngit = \"file://"+repository+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(directory, "data")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := source.GitDirectory(dataDir, source.Request{Git: "file://" + repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := strings.TrimSpace(gitOutput(t, checkout, "rev-parse", "HEAD"))
+
+	shared, err := filelock.Acquire(configDir, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = shared.Release() }()
+	if err := Execute([]string{"source"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("up-to-date source under a shared lock: %v", err)
+	}
+
+	drifted := gitCommit(t, repository, "plugin.zsh", "echo second\n")
+	gitOutput(t, checkout, "fetch", "-q", "origin")
+	gitOutput(t, checkout, "checkout", "-q", "--detach", drifted)
+	finished := make(chan error, 1)
+	go func() { finished <- Execute([]string{"source"}, &bytes.Buffer{}, &bytes.Buffer{}) }()
+	select {
+	case err := <-finished:
+		t.Fatalf("source restored while another process held the shared lock (err = %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if got := strings.TrimSpace(gitOutput(t, checkout, "rev-parse", "HEAD")); got != drifted {
+		t.Fatalf("checkout moved to %q before the exclusive lock was granted", got)
+	}
+	if err := shared.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("source did not finish after the shared lock was released")
+	}
+	if got := strings.TrimSpace(gitOutput(t, checkout, "rev-parse", "HEAD")); got != locked {
+		t.Fatalf("restored HEAD = %q, want the locked revision %q", got, locked)
+	}
+}
+
+func gitOutput(t *testing.T, directory string, args ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+	return string(output)
+}
+
+func TestLockCountsOnlyThePluginsWrittenToTheLock(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.always]\ninline = \"echo always\"\n\n" +
+		"[plugins.work]\nprofiles = [\"work\"]\ninline = \"echo work\"\n\n" +
+		"[plugins.missing]\nlocal = \"" + filepath.Join(directory, "missing") + "\"\noptional = true\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_COLOR", "never")
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("lock: %v (stderr %q)", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Locked 1 plugins") {
+		t.Fatalf("lock stderr = %q, want the one plugin that reached the lock counted", stderr.String())
+	}
+}
+
+func TestBoolEnvironmentIsParsedStrictly(t *testing.T) {
+	for _, value := range []string{"", "1", "0", "true", "TRUE", "False", " 1 ", "t"} {
+		t.Setenv("SHELF_VERBOSE", value)
+		if err := validateBoolEnvironment(); err != nil {
+			t.Errorf("SHELF_VERBOSE=%q rejected: %v", value, err)
+		}
+	}
+	t.Setenv("SHELF_VERBOSE", "TRUE")
+	if !envBool("SHELF_VERBOSE") {
+		t.Error("SHELF_VERBOSE=TRUE did not enable verbose")
+	}
+	t.Setenv("SHELF_VERBOSE", "")
+	for _, value := range []string{"yes", "on", "2", "truee"} {
+		t.Setenv("SHELF_QUIET", value)
+		var stderr bytes.Buffer
+		err := Execute([]string{"path"}, &bytes.Buffer{}, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "SHELF_QUIET") {
+			t.Errorf("SHELF_QUIET=%q err = %v, want a rejection naming the variable", value, err)
+		}
+	}
+}
+
+func TestFingerprintWithRevisionFailsOnAnUnreadableManifest(t *testing.T) {
+	directory := t.TempDir()
+	missing, err := fingerprintWithRevision("base", filepath.Join(directory, "absent.lock"))
+	if err != nil || missing == "" {
+		t.Fatalf("missing manifest = %q, %v; want a fingerprint and no error", missing, err)
+	}
+	// A directory where the manifest should be is an I/O error, not "missing".
+	unreadable := filepath.Join(directory, "manifest.lock")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fingerprintWithRevision("base", unreadable); err == nil {
+		t.Fatal("unreadable manifest was silently treated as missing")
 	}
 }
