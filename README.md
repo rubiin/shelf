@@ -17,6 +17,9 @@
   <a href="https://aur.archlinux.org/packages/shelf-sh-bin"><img alt="AUR Version" src="https://img.shields.io/aur/version/shelf-sh-bin"></a>
 </p>
 
+Full command reference, recipes, FAQ, and troubleshooting live in the
+[wiki](https://github.com/rubiin/shelf/wiki).
+
 ## Features
 
 - Git, GitHub, Gist, GitLab, Bitbucket, Codeberg, remote, local, and inline plugins.
