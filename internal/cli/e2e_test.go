@@ -1082,6 +1082,56 @@ func TestInfoRejectsUnknownPlugin(t *testing.T) {
 	}
 }
 
+func TestInfoColorModes(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	always := func() string {
+		var output bytes.Buffer
+		if err := Execute([]string{"info", "test", "--color", "always"}, &output, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}()
+	for _, expected := range []string{"\x1b[1;35msource\x1b[0m", "\x1b[1;32m\"inline\"\x1b[0m"} {
+		if !strings.Contains(always, expected) {
+			t.Errorf("colored info output missing %q: %q", expected, always)
+		}
+	}
+
+	var never bytes.Buffer
+	if err := Execute([]string{"info", "test", "--color", "never"}, &never, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(never.String(), '\x1b') {
+		t.Errorf("--color never emitted escape sequences: %q", never.String())
+	}
+	if never.String() != "- source: \"inline\"\n" {
+		t.Fatalf("--color never info output = %q, want plain output", never.String())
+	}
+
+	var auto bytes.Buffer
+	if err := Execute([]string{"info", "test"}, &auto, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(auto.String(), '\x1b') {
+		t.Errorf("auto color emitted escapes to a non-terminal: %q", auto.String())
+	}
+}
+
 func TestStatusReportsHealthyLockedPlugins(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

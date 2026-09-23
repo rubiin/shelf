@@ -821,6 +821,7 @@ func listPlugins(paths Paths, output io.Writer) error {
 
 // pluginInfo reads a locked plugin's details from the lock file.
 func pluginInfo(paths Paths, name string, output io.Writer) error {
+	colors := writerColors(output)
 	locked, err := lock.Read(paths.LockFile(profile))
 	if err != nil {
 		return err
@@ -863,7 +864,7 @@ func pluginInfo(paths Paths, name string, output io.Writer) error {
 		lines = append(lines, [2]string{"size", humanSize(total)})
 	}
 	for _, line := range lines {
-		if _, err := fmt.Fprintf(output, "- %s: %q\n", line[0], line[1]); err != nil {
+		if _, err := fmt.Fprintf(output, "- %s: %s\n", colors.header(line[0]), colors.success(fmt.Sprintf("%q", line[1]))); err != nil {
 			return err
 		}
 	}
