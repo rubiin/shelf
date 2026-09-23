@@ -83,6 +83,11 @@ golangci-lint run ./...
 
 ## Workflow
 
-* Run `gofmt`, `go vet`, `go build`, and `go test ./...` before considering a change complete.
+* Run `gofmt`, `go vet`, `go build`, and `go test ./...` and lint before considering a change complete.
 * Do not commit changes unless explicitly requested.
 * Keep commits and PRs scoped to a single logical change; call out any Sheldon-compatibility implication explicitly in the description.
+* Use unslop skill to write comments clearly and concisely, avoiding unnecessary verbosity and ensuring they add value to the code. Same
+  applies for generated commit
+* Use brainstroming skill to generate and evaluate ideas effectively before implementing them in code.
+* Review and refactor code regularly to maintain clarity, simplicity, and adherence to established patterns and best practices.
+* Try to use sub-agent driven development whenever possible

@@ -8,9 +8,7 @@ import (
 	"strings"
 )
 
-// Choose shows a numbered menu of options and returns the option the user
-// picks, matched by number or case-insensitive name. Empty and unrecognized
-// answers re-prompt until a valid choice is made or reading input fails.
+// Choose shows a numbered menu and returns the pick by number or name; bad answers re-prompt.
 func Choose(question string, options []string, in *bufio.Reader, out io.Writer) (string, error) {
 	if len(options) == 0 {
 		return "", errors.New("no options to choose from")
@@ -36,9 +34,7 @@ func Choose(question string, options []string, in *bufio.Reader, out io.Writer) 
 	}
 }
 
-// Confirm asks a y/N question and reports whether the user agreed. Only y or
-// yes (case-insensitive) confirms; an empty answer, n, or no declines, and any
-// other answer re-prompts until a valid one is given or reading input fails.
+// Confirm asks a y/N question: y/yes agrees, empty/n/no declines, anything else re-prompts.
 func Confirm(question string, in *bufio.Reader, out io.Writer) (bool, error) {
 	for {
 		_, _ = fmt.Fprintf(out, "%s [y/N] ", question)
@@ -58,6 +54,7 @@ func Confirm(question string, in *bufio.Reader, out io.Writer) (bool, error) {
 }
 
 // matchOption accepts an answer as either an option number or its name.
+// matchOption accepts an option number or its name.
 func matchOption(answer string, options []string) (string, bool) {
 	answer = strings.ToLower(strings.TrimSpace(answer))
 	for index, option := range options {
@@ -68,8 +65,7 @@ func matchOption(answer string, options []string) (string, bool) {
 	return "", false
 }
 
-// readLine reads one line, stripping the trailing newline. Input ending at EOF
-// without a newline is still returned; EOF with no input at all is an error.
+// readLine accepts a final line without a newline; only empty EOF is an error.
 func readLine(in *bufio.Reader) (string, error) {
 	line, err := in.ReadString('\n')
 	if err != nil && line == "" {

@@ -24,10 +24,10 @@ import (
 	"shelf/internal/tui"
 )
 
-// Version is the release version, which main stamps through the linker.
+// Version is stamped by main through the linker.
 var Version = "dev"
 
-// successMark prefixes successful command results on stdout with a check mark.
+// successMark prefixes success messages on stdout.
 const successMark = "✓"
 
 var (
@@ -42,7 +42,7 @@ var (
 	forceUpdate    bool
 )
 
-// Context contains the resolved runtime settings shared by commands.
+// Context holds the runtime settings shared by all commands.
 type Context struct {
 	ConfigFile      string
 	ConfigDirectory string
@@ -346,17 +346,15 @@ func NewRoot() *cobra.Command {
 	initCommand.Flags().StringVar(&initShell, "shell", "", "shell: bash or zsh")
 	command.AddCommand(initCommand)
 	command.AddCommand(newSelfUpdateCommand())
-	// A non-empty Version makes Cobra install a root --version flag that prints `shelf version <Version>`.
+	// Cobra installs a root --version flag only when Version is non-empty.
 	command.Version = Version
 	return command
 }
 
-// resolvePaths returns the paths shared by every command.
 func resolvePaths() (Paths, error) {
 	return ResolvePaths(homeDir(), configDir, dataDir, configFile)
 }
 
-// access is the kind of config directory lock a command needs.
 type access int
 
 const (
@@ -364,7 +362,7 @@ const (
 	accessWrite
 )
 
-// withConfigLock resolves paths and holds the config directory lock while run executes.
+// withConfigLock holds the config directory lock while run executes.
 func withConfigLock(mode access, run func(Paths) error) error {
 	paths, err := resolvePaths()
 	if err != nil {
@@ -378,7 +376,6 @@ func withConfigLock(mode access, run func(Paths) error) error {
 	return run(paths)
 }
 
-// sourceInputs holds the config-file derivations a source run needs.
 type sourceInputs struct {
 	Config          config.Config
 	BaseFingerprint string
@@ -386,7 +383,7 @@ type sourceInputs struct {
 	Shell           string
 }
 
-// previousETags reads the previous lock's remote validators, so update and relock runs ask the server to skip bodies that have not changed.
+// previousETags lets locking revalidate and skip downloading unchanged bodies.
 func previousETags(paths Paths) map[string]string {
 	locked, err := lock.Read(paths.LockFile(profile))
 	if err != nil {
@@ -395,7 +392,7 @@ func previousETags(paths Paths) map[string]string {
 	return lock.PluginETags(locked)
 }
 
-// buildDiagnostics returns the writer build output streams to, or nil when quiet so the lock discards it.
+// buildDiagnostics returns nil when quiet, which makes the lock discard it.
 func buildDiagnostics(writer io.Writer) io.Writer {
 	if quiet {
 		return nil
@@ -403,7 +400,6 @@ func buildDiagnostics(writer io.Writer) io.Writer {
 	return writer
 }
 
-// loadSourceInputs reads and validates the config, resolving the lock context and shell.
 func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
@@ -426,7 +422,7 @@ func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) 
 	}, nil
 }
 
-// renderScript writes the shell code for a verified lock file; the lock records shell and templates, so rendering needs nothing from the config.
+// renderScript writes shell code from a verified lock; the lock already carries shell and templates.
 func renderScript(output io.Writer, locked lock.LockedConfig, diagnostics io.Writer) error {
 	log := newLogger(diagnostics)
 	for _, plugin := range locked.Plugins {
@@ -444,7 +440,7 @@ func renderScript(output io.Writer, locked lock.LockedConfig, diagnostics io.Wri
 	return err
 }
 
-// fingerprintWithShell hashes the config bytes with the shell override, so a lock taken under a different SHELF_SHELL is stale.
+// fingerprintWithShell mixes in SHELF_SHELL so a lock taken for another shell is stale.
 func fingerprintWithShell(contents []byte) string {
 	return lock.Fingerprint([]byte(lock.Fingerprint(contents) + "\n" + os.Getenv("SHELF_SHELL")))
 }
@@ -457,7 +453,7 @@ func fingerprintWithRevision(fingerprint, revisionPath string) string {
 	return lock.Fingerprint([]byte(fingerprint + "\n" + lock.Fingerprint(contents)))
 }
 
-// unlockedLock reads the lock and verifies it against the config's fingerprint without decoding the config, the shell-startup path.
+// unlockedLock verifies the lock against raw config bytes, skipping a config decode. This is the shell-startup path.
 func unlockedLock(paths Paths, lockPath string) (lock.LockedConfig, bool) {
 	contents, err := os.ReadFile(paths.ConfigFile)
 	if err != nil {
@@ -502,7 +498,6 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 			log.status("Checked", log.dim(pluginSource(plugin)))
 		}
 	}
-	//  prunes installed sources that the config no longer owns before locking.
 	if err := cleanUnownedSources(paths.DataDirectory, cfg, log); err != nil {
 		return err
 	}
@@ -590,7 +585,7 @@ func editConfig(paths Paths) error {
 	return command.Run()
 }
 
-// splitEditorCommand splits an editor command line with shell-word rules, honoring quotes and escapes.
+// splitEditorCommand applies shell-word splitting: quotes and escapes honored.
 func splitEditorCommand(value string) ([]string, error) {
 	var (
 		arguments []string
@@ -635,7 +630,7 @@ func splitEditorCommand(value string) ([]string, error) {
 	return arguments, nil
 }
 
-// sourceConfig prints shell code, reading a fresh lock file under a shared lock and relocking exclusively only when needed.
+// sourceConfig reads under a shared lock and upgrades to exclusive only when a relock is needed.
 func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode lock.Mode, concurrency int) error {
 	lockPath := paths.LockFile(profile)
 	log := newLogger(diagnostics)
@@ -664,7 +659,7 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 		return err
 	}
 	defer func() { _ = guard.Release() }()
-	// Another process may have edited the config or relocked while we waited for the lock.
+	// Another process may have relocked while we waited.
 	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
@@ -700,7 +695,7 @@ func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) 
 		return err
 	}
 	log := newLogger(diagnostics)
-	// Update skips frozen plugins unless forced, so their status marks them.
+	// Update skips frozen plugins unless --force; mark them Frozen.
 	for _, name := range lock.PluginNames(inputs.Config) {
 		plugin := inputs.Config.Plugins[name]
 		if forceUpdate || !plugin.Frozen || plugin.Inline != "" || !lock.Active(plugin.Profiles, profile) {
@@ -718,7 +713,7 @@ func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) 
 	return renderScript(output, locked, diagnostics)
 }
 
-// interactiveSelect is the picker behind remove --interactive; a variable so tests can script it.
+// interactiveSelect is the remove --interactive picker; a var so tests can script it.
 var interactiveSelect = func(options []string, out io.Writer) ([]string, error) {
 	return tui.Select(options, tui.IO{In: os.Stdin, Out: out, MakeRaw: term.MakeRaw, Restore: term.Restore, Color: colorEnabled(color, true)})
 }
@@ -757,7 +752,7 @@ func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
 	return nil
 }
 
-// initShellPrompt and initConfirmPrompt ask the init questions; variables so tests can script them.
+// The init prompts; vars so tests can script them.
 var initShellPrompt = func(in *bufio.Reader, out io.Writer) (config.Shell, error) {
 	choice, err := tui.Choose("Select shell:", []string{"bash", "zsh"}, in, out)
 	if err != nil {
@@ -770,10 +765,7 @@ var initConfirmPrompt = func(path string, in *bufio.Reader, out io.Writer) (bool
 	return tui.Confirm(fmt.Sprintf("Initialize config at %s?", path), in, out)
 }
 
-// initConfig refuses to reinitialize an existing config, otherwise asks which
-// shell to configure, confirms the target path, and only then writes the
-// config. --non-interactive and the --shell flag skip the prompts; the success
-// message is always printed last.
+// initConfig refuses an existing config; --non-interactive skips all prompts, --shell just the shell prompt.
 func initConfig(cmd *cobra.Command, paths Paths, flagShell string) error {
 	if _, err := os.Stat(paths.ConfigFile); err == nil {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), writerColors(cmd.ErrOrStderr()).warn("config already exists at "+paths.ConfigFile))
@@ -818,7 +810,7 @@ func listPlugins(paths Paths, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// PluginNames also reports plugins declared with dotted keys, which PluginOrder misses.
+	// PluginNames also reports dotted keys, which PluginOrder misses.
 	for _, name := range lock.PluginNames(cfg) {
 		if _, err := fmt.Fprintln(output, name); err != nil {
 			return err
@@ -827,7 +819,7 @@ func listPlugins(paths Paths, output io.Writer) error {
 	return nil
 }
 
-// pluginInfo reports a locked plugin's source, revision, selected files, and installed size from the lock file.
+// pluginInfo reads a locked plugin's details from the lock file.
 func pluginInfo(paths Paths, name string, output io.Writer) error {
 	locked, err := lock.Read(paths.LockFile(profile))
 	if err != nil {
@@ -844,7 +836,7 @@ func pluginInfo(paths Paths, name string, output io.Writer) error {
 	if !found {
 		return fmt.Errorf("plugin %q is not in the lock file", name)
 	}
-	// Local and remote plugins record no source; their installed directory names the source instead.
+	// Local and remote plugins record no source; the directory stands in.
 	source := plugin.Source
 	switch {
 	case plugin.Inline != "":
@@ -862,7 +854,7 @@ func pluginInfo(paths Paths, name string, output io.Writer) error {
 	for _, file := range plugin.Files {
 		lines = append(lines, [2]string{"files", file})
 	}
-	// Inline plugins have nothing installed, so they have no size.
+	// Inline plugins install nothing, so they have no size.
 	if plugin.Directory != "" {
 		total, err := directorySize(plugin.Directory)
 		if err != nil {
@@ -878,7 +870,6 @@ func pluginInfo(paths Paths, name string, output io.Writer) error {
 	return nil
 }
 
-// directorySize sums the bytes of every file under a directory.
 func directorySize(directory string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(directory, func(_ string, entry fs.DirEntry, walkErr error) error {
@@ -898,7 +889,7 @@ func directorySize(directory string) (int64, error) {
 	return total, err
 }
 
-// humanSize formats a byte count the way du does: 512B, 24K, 1.2M.
+// humanSize formats bytes like du: 512B, 24K, 1.2M.
 func humanSize(total int64) string {
 	units := []string{"B", "K", "M", "G", "T"}
 	value := float64(total)
@@ -955,7 +946,7 @@ func pluginStatus(paths Paths, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// Check every git-sourced plugin's revision in parallel, indexed by position so output stays in declaration order.
+	// Check revisions in parallel; results are indexed by position to keep declaration order.
 	plugins := locked.Plugins
 	states := make([]string, len(plugins))
 	var tasks []int
@@ -1031,7 +1022,7 @@ func doctor(paths Paths, output io.Writer) error {
 	if _, err := fmt.Fprintf(output, "%s  %s\n", outColors.header(fmt.Sprintf("%-8s", "shell:")), displayPath(shellPath)); err != nil {
 		return err
 	}
-	// Continuation line aligned with the value column under "shell:".
+	// Aligned with the value column under "shell:".
 	if _, err := fmt.Fprintf(output, "%*s%s\n", 10, "", outColors.dim(shellVersion)); err != nil {
 		return err
 	}
@@ -1109,7 +1100,7 @@ func cleanPlugins(paths Paths, output io.Writer) error {
 	return err
 }
 
-// cleanUnownedSources prunes installed sources the config no longer owns, before locking.
+// cleanUnownedSources prunes installed sources the config no longer owns.
 func cleanUnownedSources(dataDirectory string, cfg config.Config, log logger) error {
 	removed, err := cleanInstallDirectories(dataDirectory, cfg)
 	if err != nil {
@@ -1121,7 +1112,6 @@ func cleanUnownedSources(dataDirectory string, cfg config.Config, log logger) er
 	return nil
 }
 
-// cleanInstallDirectories removes install paths the config no longer owns and names what it removed.
 func cleanInstallDirectories(dataDirectory string, cfg config.Config) ([]string, error) {
 	kept, sources, err := ownedInstallPaths(dataDirectory, cfg)
 	if err != nil {
@@ -1140,7 +1130,7 @@ func cleanInstallDirectories(dataDirectory string, cfg config.Config) ([]string,
 	return removed, nil
 }
 
-// ownedInstallPaths collects the paths the config owns plus the source directories not to walk into.
+// ownedInstallPaths returns owned paths plus source dirs not to walk into.
 func ownedInstallPaths(dataDirectory string, cfg config.Config) (map[string]bool, map[string]bool, error) {
 	kept := map[string]bool{}
 	sources := map[string]bool{}
@@ -1168,7 +1158,6 @@ func ownedInstallPaths(dataDirectory string, cfg config.Config) (map[string]bool
 	return kept, sources, nil
 }
 
-// keepAncestors marks a path and every parent directory as owned.
 func keepAncestors(kept map[string]bool, path string) {
 	for path != "" {
 		kept[path] = true
@@ -1180,7 +1169,7 @@ func keepAncestors(kept map[string]bool, path string) {
 	}
 }
 
-// removeUnownedPaths deletes everything under root that the config does not own.
+// removeUnownedPaths deletes anything under root the config does not own.
 func removeUnownedPaths(root string, kept, sources map[string]bool) ([]string, error) {
 	var removed []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -1211,7 +1200,6 @@ func removeUnownedPaths(root string, kept, sources map[string]bool) ([]string, e
 	return removed, err
 }
 
-// installDisplayPath names an install path relative to the data directory.
 func installDisplayPath(dataDirectory, path string) string {
 	relative, err := filepath.Rel(dataDirectory, path)
 	if err != nil {
@@ -1220,7 +1208,7 @@ func installDisplayPath(dataDirectory, path string) string {
 	return relative
 }
 
-// loadConfigWithFingerprint reads the config once and returns it with its lock fingerprint.
+// loadConfigWithFingerprint reads the config once; the fingerprint also mixes in the shell.
 func loadConfigWithFingerprint(path string) (config.Config, string, error) {
 	cfg, contents, err := config.LoadWithContents(path)
 	if err != nil {
@@ -1229,7 +1217,6 @@ func loadConfigWithFingerprint(path string) (config.Config, string, error) {
 	return cfg, fingerprintWithShell(contents), nil
 }
 
-// configShell returns the shell named by SHELF_SHELL, erroring on an unsupported value.
 func configShell() (config.Shell, error) {
 	switch value := os.Getenv("SHELF_SHELL"); value {
 	case "":
@@ -1243,7 +1230,7 @@ func configShell() (config.Shell, error) {
 	}
 }
 
-// resolveShell returns the configured shell when the config sets one, otherwise SHELF_SHELL.
+// resolveShell prefers the config's shell, falling back to SHELF_SHELL.
 func resolveShell(cfg config.Config) (config.Shell, error) {
 	if cfg.Shell != "" {
 		return cfg.Shell, nil
@@ -1263,17 +1250,17 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
-// writeError prints a failure as a blank line followed by an error prefix.
+// writeError prints a blank line, then the error prefix.
 func writeError(diagnostics io.Writer, err error) {
 	_, _ = fmt.Fprintf(diagnostics, "\n%s %s\n", writerColors(diagnostics).error("error:"), err)
 }
 
-// RuntimeContext reports settings to non-Cobra callers, delegating paths to ResolvePaths.
+// RuntimeContext reports resolved settings to non-Cobra callers.
 func RuntimeContext() Context {
 	context := Context{Profile: profile, Quiet: quiet, NonInteractive: nonInteractive, Verbose: verbose, Color: color}
 	paths, err := ResolvePaths(homeDir(), configDir, dataDir, configFile)
 	if err != nil {
-		// An unresolvable home directory leaves the path fields empty rather than guessing.
+		// Unresolvable home leaves the path fields empty.
 		return context
 	}
 	context.ConfigFile = paths.ConfigFile

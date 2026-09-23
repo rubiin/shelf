@@ -35,7 +35,6 @@ func BenchmarkScriptPlainSource(b *testing.B) {
 
 func BenchmarkScriptDeferTemplateLoops(b *testing.B) {
 	locked := benchLocked()
-	deferTemplate := "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 	locked.Plugins[0].Apply = []string{"defer"}
 	locked.Plugins[3].Apply = []string{"defer"}
 	locked.Plugins[5].Apply = []string{"defer"}

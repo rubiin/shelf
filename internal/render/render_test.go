@@ -135,6 +135,10 @@ func TestBuiltinTemplates(t *testing.T) {
 	if bash["zcompile"] != bash["source"] {
 		t.Errorf("bash zcompile = %q, want it to match the source template %q", bash["zcompile"], bash["source"])
 	}
+	// defer degrades the same way: bash has no prompt-time deferral, so the files just load now.
+	if bash["defer"] != bash["source"] {
+		t.Errorf("bash defer = %q, want it to match the source template %q", bash["defer"], bash["source"])
+	}
 	zsh := BuiltinTemplates("zsh")
 	for name, want := range map[string]string{
 		"PATH":  "export PATH=\"{{ dir }}:$PATH\"",
@@ -147,6 +151,9 @@ func TestBuiltinTemplates(t *testing.T) {
 	}
 	if zsh["zcompile"] != zcompileTemplate {
 		t.Errorf("zsh zcompile = %q, want the guard template", zsh["zcompile"])
+	}
+	if zsh["defer"] != deferTemplate {
+		t.Errorf("zsh defer = %q, want the queueing defer template", zsh["defer"])
 	}
 
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{Name: "demo", Directory: "/tmp/demo", Apply: []string{"path"}}}}, "zsh")
@@ -207,6 +214,89 @@ func TestScriptTreatsZcompileAsNoOpInBash(t *testing.T) {
 	want := "eval 'source \"/tmp/one.zsh\"\n'\n"
 	if compiled != want {
 		t.Fatalf("bash output = %q, want %q", compiled, want)
+	}
+}
+
+// TestScriptRendersDeferredSourceBeforeEachFile checks that the built-in defer template queues
+// one source per file with the embedded scheduler, whose definition precedes the deferred chunk,
+// and that the hooks stay immediate.
+func TestScriptRendersDeferredSourceBeforeEachFile(t *testing.T) {
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh", "/tmp/two.zsh"},
+		Hooks: map[string]string{"pre": "echo pre\n", "post": "echo post"},
+		Apply: []string{"defer"},
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := shelfDeferPreamble + "eval 'echo pre\n" +
+		"_shelf_defer source \"/tmp/one.zsh\"\n" +
+		"_shelf_defer source \"/tmp/two.zsh\"\n" +
+		"echo post\n'\n"
+	if script != want {
+		t.Fatalf("script = %q, want %q", script, want)
+	}
+}
+
+// TestScriptTreatsDeferAsNoOpInBash checks that under bash the same apply list renders each
+// file as a plain source line, byte-identical to applying the source template.
+func TestScriptTreatsDeferAsNoOpInBash(t *testing.T) {
+	deferred, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh"},
+		Apply: []string{"defer"},
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{"/tmp/one.zsh"},
+		Apply: []string{"source"},
+	}}}, "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deferred != plain {
+		t.Fatalf("bash defer output = %q, want the plain source output %q", deferred, plain)
+	}
+	want := "eval 'source \"/tmp/one.zsh\"\n'\n"
+	if deferred != want {
+		t.Fatalf("bash output = %q, want %q", deferred, want)
+	}
+}
+
+// TestScriptDeferSourcesAtFirstIdle runs the rendered script in a real zsh, proving the queued
+// deferred files are sourced in order when the first idle pass drains the queue (the same queue
+// the zle -F handler drains after the first prompt draws).
+func TestScriptDeferSourcesAtFirstIdle(t *testing.T) {
+	directory := t.TempDir()
+	one := filepath.Join(directory, "one.zsh")
+	two := filepath.Join(directory, "two.zsh")
+	if err := os.WriteFile(one, []byte("print -r -- one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(two, []byte("print -r -- two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
+		Name:  "demo",
+		Files: []string{one, two},
+		Apply: []string{"defer"},
+	}}}, "zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Eval the script (defines the scheduler, queues the sources) then drain the queue the way
+	// _shelf_defer_idle does when zle first goes idle. Non-interactive zsh never draws a prompt,
+	// so draining directly is the faithful stand-in for the first idle pass.
+	output, err := exec.Command("zsh", "-fc", `eval "$1"; _shelf_defer_drain`, "shelf-test", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh eval failed: %v\n%s", err, output)
+	}
+	if string(output) != "one\ntwo\n" {
+		t.Fatalf("zsh output = %q, want %q", output, "one\ntwo\n")
 	}
 }
 
@@ -490,21 +580,20 @@ func TestTemplateLeavesLiteralTextUntouched(t *testing.T) {
 }
 
 func TestScriptExpandsHookTemplateLoops(t *testing.T) {
-	template := "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
 	script, err := Script(lock.LockedConfig{Plugins: []lock.LockedPlugin{{
 		Name:  "demo",
 		Files: []string{"/tmp/one.zsh", "/tmp/two.zsh"},
 		Apply: []string{"defer"},
 		Hooks: map[string]string{"pre": "echo pre", "post": "echo post"},
-	}}}, "zsh", map[string]string{"defer": template})
+	}}}, "zsh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(script, "echo pre") || !strings.Contains(script, "echo post") {
 		t.Fatalf("hook template output missing from script: %q", script)
 	}
-	if !strings.Contains(script, "zsh-defer source \"/tmp/one.zsh\"") || !strings.Contains(script, "zsh-defer source \"/tmp/two.zsh\"") {
-		t.Fatalf("defer loop output missing from script: %q", script)
+	if !strings.Contains(script, "_shelf_defer source \"/tmp/one.zsh\"") || !strings.Contains(script, "_shelf_defer source \"/tmp/two.zsh\"") {
+		t.Fatalf("defer queue output missing from script: %q", script)
 	}
 	if strings.Contains(script, "{{ hooks?.pre") || strings.Contains(script, "{% for file in files %}") {
 		t.Fatalf("template syntax was left literal in script: %q", script)

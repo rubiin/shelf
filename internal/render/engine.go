@@ -9,7 +9,7 @@ import (
 	"unicode"
 )
 
-// valueKind is the kind of value a template can look up, print, or iterate.
+// valueKind tags what a templateValue holds.
 type valueKind int
 
 const (
@@ -17,19 +17,17 @@ const (
 	valueText
 	valueNumber
 	valueBool
-	// valueTexts is a string list, which a template can index or loop over.
 	valueTexts
 	valueMap
 	valueLoop
 )
 
-// loopState is a loop's position, exposed as loop.index, loop.first, and loop.last.
+// loopState backs loop.index, loop.first, and loop.last.
 type loopState struct {
 	index  int
 	length int
 }
 
-// templateValue is a renderable value, holding one of the types a template can reference.
 type templateValue struct {
 	kind   valueKind
 	text   string
@@ -59,7 +57,6 @@ func mapValue(entries map[string]string) templateValue {
 	return templateValue{kind: valueMap, dict: values}
 }
 
-// print renders a value the way the engine writes it into the script.
 func (value templateValue) print() (string, error) {
 	switch value.kind {
 	case valueNothing:
@@ -75,7 +72,7 @@ func (value templateValue) print() (string, error) {
 	}
 }
 
-// truthy reports whether a value passes a condition: empty values are falsy.
+// truthy: empty values are falsy.
 func (value templateValue) truthy() bool {
 	switch value.kind {
 	case valueNothing:
@@ -96,17 +93,16 @@ func (value templateValue) truthy() bool {
 	return false
 }
 
-// scope resolves template names: loop variables shadow the plugin values beneath them.
+// scope resolves names; loop variables shadow plugin values.
 type scope struct {
-	// A plugin's values live in the outermost scope, which a template render creates once.
 	plugin    PluginData
 	hasPlugin bool
 	parent    *scope
-	// A loop binds at most two variables, so they live in the struct instead of a map.
+	// Loops bind at most two variables, so they live in the struct, not a map.
 	names  [2]string
 	values [2]templateValue
 	count  int
-	// The loop this scope runs, exposed as loop.*, plus the caches below.
+	// Loop position for loop.*; files/hooks are built on first use.
 	loopIndex  int
 	loopLength int
 	hasLoop    bool
@@ -114,11 +110,10 @@ type scope struct {
 	filesReady bool
 	hooks      templateValue
 	hooksReady bool
-	// childScope is this scope's one loop scope, reused by every loop sharing this parent.
+	// childScope is reused by every loop under this scope.
 	childScope *scope
 }
 
-// pluginScope exposes the values handed to a plugin's templates.
 func pluginScope(data PluginData) *scope { return &scope{plugin: data, hasPlugin: true} }
 
 func (s *scope) lookup(name string) (templateValue, bool) {
@@ -140,7 +135,7 @@ func (s *scope) lookup(name string) (templateValue, bool) {
 	return templateValue{}, false
 }
 
-// pluginValue resolves one of a plugin's values, converting lists and maps only when asked.
+// pluginValue converts lists and maps lazily, on first use.
 func (s *scope) pluginValue(name string) (templateValue, bool) {
 	switch name {
 	case "name":
@@ -164,7 +159,7 @@ func (s *scope) pluginValue(name string) (templateValue, bool) {
 	}
 }
 
-// child returns this scope's one loop scope, creating it once so loop iterations allocate nothing.
+// child reuses the one child scope so loop iterations allocate nothing.
 func (s *scope) child(names []string) *scope {
 	child := s.childScope
 	if child == nil {
@@ -178,7 +173,7 @@ func (s *scope) child(names []string) *scope {
 	return child
 }
 
-// scriptBuffer accumulates a rendered script and can inspect the byte it last wrote.
+// scriptBuffer exposes the last byte written so callers can check for a trailing newline.
 type scriptBuffer struct{ data []byte }
 
 func (b *scriptBuffer) WriteString(text string) { b.data = append(b.data, text...) }
@@ -191,7 +186,6 @@ func (b *scriptBuffer) Last() byte { return b.data[len(b.data)-1] }
 
 func (b *scriptBuffer) String() string { return string(b.data) }
 
-// node is one piece of a parsed template.
 type node interface {
 	render(*scope, *scriptBuffer) error
 }
@@ -200,7 +194,7 @@ type textNode string
 
 type expressionNode struct {
 	expression string
-	// plan is the expression parsed once at compile time, so renders skip the scan.
+	// plan is parsed once at compile time so renders skip the work.
 	plan expressionPlan
 }
 
@@ -215,7 +209,7 @@ type forNode struct {
 	names    []string
 	iterable string
 	body     []node
-	// usesLoop records whether the body reads loop.*, so plain loops skip that scope value.
+	// usesLoop: body reads loop.*, so plain loops can skip it.
 	usesLoop bool
 }
 
@@ -272,7 +266,6 @@ func (n forNode) render(current *scope, output *scriptBuffer) error {
 		if len(n.names) != 1 {
 			return fmt.Errorf("a list loop takes one variable, got %d", len(n.names))
 		}
-		// The loop scope is reused, so iterations only write into it instead of allocating.
 		loop := current.child(n.names)
 		loop.hasLoop, loop.loopLength = n.usesLoop, len(value.texts)
 		for index, item := range value.texts {
@@ -307,7 +300,6 @@ func (n forNode) render(current *scope, output *scriptBuffer) error {
 	}
 }
 
-// tokenKind tells literal text apart from expression and block tags.
 type tokenKind int
 
 const (
@@ -321,7 +313,6 @@ type token struct {
 	text string
 }
 
-// tokenize splits a template into literal text and tags.
 func tokenize(text string) ([]token, error) {
 	var tokens []token
 	for {
@@ -358,7 +349,6 @@ type parser struct {
 	position int
 }
 
-// parseTemplate parses a template body into renderable nodes.
 func parseTemplate(text string) ([]node, error) {
 	tokens, err := tokenize(text)
 	if err != nil {
@@ -375,7 +365,7 @@ func parseTemplate(text string) ([]node, error) {
 	return nodes, nil
 }
 
-// parseNodes reads nodes until the template ends or a closing block is reached.
+// parseNodes stops at the end of the template or a closing block, which it returns.
 func (p *parser) parseNodes() ([]node, string, error) {
 	var nodes []node
 	for p.position < len(p.tokens) {
@@ -458,7 +448,7 @@ func (p *parser) parseFor(clause string) (node, error) {
 	return forNode{names: variables, iterable: iterable, body: body, usesLoop: nodesUseLoop(body) || referencesName(iterable, "loop")}, nil
 }
 
-// nodesUseLoop reports whether any expression in the given nodes reads the loop scope value.
+// nodesUseLoop reports whether any node reads loop.*.
 func nodesUseLoop(nodes []node) bool {
 	for _, item := range nodes {
 		switch current := item.(type) {
@@ -481,7 +471,6 @@ func nodesUseLoop(nodes []node) bool {
 	return false
 }
 
-// referencesName reports whether an expression mentions a value name anywhere in it.
 func referencesName(text, name string) bool {
 	for _, field := range strings.FieldsFunc(text, func(character rune) bool {
 		return character != '_' && !unicode.IsLetter(character) && !unicode.IsDigit(character)
@@ -493,13 +482,13 @@ func referencesName(text, name string) bool {
 	return false
 }
 
-// splitTag separates a block's keyword from its clause, keeping clauses such as "x in files".
+// splitTag cuts at the first space so clauses like "x in files" survive.
 func splitTag(text string) (string, string) {
 	keyword, rest, _ := strings.Cut(strings.TrimSpace(text), " ")
 	return keyword, strings.TrimSpace(rest)
 }
 
-// evalExpression evaluates an expression: a literal, value path, call, filter, or `not`.
+// evalExpression handles literals, paths, calls, filters, and `not`.
 func evalExpression(text string, current *scope) (templateValue, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -529,7 +518,7 @@ func evalExpression(text string, current *scope) (templateValue, error) {
 		}
 		return textValue(unquoted), nil
 	}
-	// Only numeric-looking expressions are parsed, so names do not allocate parse errors.
+	// Only numeric-looking text is parsed, so names never allocate parse errors.
 	if isNumeric(text) {
 		if number, err := strconv.Atoi(text); err == nil {
 			return numberValue(number), nil
@@ -541,7 +530,7 @@ func evalExpression(text string, current *scope) (templateValue, error) {
 	case "false":
 		return boolValue(false), nil
 	}
-	// Fast path for the plain names that most templates use.
+	// Fast path for bare names, the common case.
 	if isPlainName(text) {
 		value, exists := current.lookup(text)
 		if !exists {
@@ -559,7 +548,7 @@ func evalExpression(text string, current *scope) (templateValue, error) {
 type planKind int
 
 const (
-	// planGeneric is any expression the planner leaves to the full evaluator.
+	// planGeneric is the zero value: anything the planner leaves to evalExpression.
 	planGeneric planKind = iota
 	planName
 	planOptionalName
@@ -567,7 +556,7 @@ const (
 	planFiltered
 )
 
-// expressionPlan is an expression's shape, resolved once when a template is compiled.
+// expressionPlan is an expression's shape, resolved at compile time.
 type expressionPlan struct {
 	kind           planKind
 	text           string
@@ -579,7 +568,7 @@ type expressionPlan struct {
 	inner          *expressionPlan
 }
 
-// planExpression records the shape of an expression, leaving anything unusual to evalExpression.
+// planExpression returns the zero plan for shapes evalExpression must handle.
 func planExpression(text string) expressionPlan {
 	trimmed := strings.TrimSpace(text)
 	if index := findFilter(trimmed); index >= 0 {
@@ -613,7 +602,7 @@ func planExpression(text string) expressionPlan {
 	}
 }
 
-// evaluate resolves a planned expression, falling back to the full evaluator for other shapes.
+// evaluate falls back to evalExpression for unplanned shapes.
 func (plan expressionPlan) evaluate(text string, current *scope) (templateValue, error) {
 	switch plan.kind {
 	case planName, planOptionalName:
@@ -652,7 +641,6 @@ func (plan expressionPlan) evaluate(text string, current *scope) (templateValue,
 	}
 }
 
-// isIdentifier reports whether text is a value name.
 func isIdentifier(text string) bool {
 	if text == "" || text == "true" || text == "false" {
 		return false
@@ -669,7 +657,6 @@ func isIdentifier(text string) bool {
 	return true
 }
 
-// isIdentifierOrNumber reports whether text names a member, which may be a list index.
 func isIdentifierOrNumber(text string) bool {
 	if text == "" {
 		return false
@@ -682,12 +669,10 @@ func isIdentifierOrNumber(text string) bool {
 	return true
 }
 
-// isNumeric reports whether an expression could be an integer literal.
 func isNumeric(text string) bool {
 	return text != "" && (text[0] == '-' || (text[0] >= '0' && text[0] <= '9'))
 }
 
-// isPlainName reports whether an expression is a bare value name.
 func isPlainName(text string) bool {
 	if text == "" {
 		return false
@@ -701,7 +686,6 @@ func isPlainName(text string) bool {
 	return true
 }
 
-// findFilter returns the index of a filter pipe that is not inside quotes or parentheses.
 func findFilter(text string) int {
 	depth := 0
 	var quote byte
@@ -740,7 +724,6 @@ func parseCall(text string) (string, []string, bool) {
 	return name, splitArguments(text[open+1 : len(text)-1]), true
 }
 
-// splitArguments splits a call's arguments on top-level commas.
 func splitArguments(text string) []string {
 	var arguments []string
 	depth := 0
@@ -773,7 +756,7 @@ func splitArguments(text string) []string {
 	return arguments
 }
 
-// callFunction resolves the built-in functions: `nl` and `get`.
+// callFunction handles the built-ins: nl and get.
 func callFunction(name string, arguments []string, current *scope) (templateValue, error) {
 	switch name {
 	case "nl":
@@ -816,7 +799,7 @@ func applyFilter(text string, value templateValue) (templateValue, error) {
 	}
 }
 
-// newlineValue appends a newline unless the text already ends with one.
+// newlineValue adds a newline only if one is missing.
 func newlineValue(value templateValue) templateValue {
 	if value.kind != valueText || strings.HasSuffix(value.text, "\n") {
 		return value
@@ -830,7 +813,7 @@ type pathSegment struct {
 	optional bool
 }
 
-// nextSegmentEnd finds the next path separator: a dot or the start of an optional "?." member.
+// The next separator is a dot, or the "?" that starts a "?." member.
 func nextSegmentEnd(text string) int {
 	for index := 1; index < len(text); index++ {
 		if text[index] == '?' && index+1 < len(text) && text[index+1] == '.' {
@@ -843,7 +826,7 @@ func nextSegmentEnd(text string) int {
 	return -1
 }
 
-// nextSegment splits one member off a value path such as hooks?.pre or files.0.
+// nextSegment splits one member off a path like hooks?.pre or files.0.
 func nextSegment(path string) (segment pathSegment, rest string) {
 	remaining := path
 	switch {
@@ -859,7 +842,7 @@ func nextSegment(path string) (segment pathSegment, rest string) {
 	return pathSegment{name: remaining, optional: segment.optional}, ""
 }
 
-// lookupPath resolves a dotted value path, where `?.` returns nothing instead of failing.
+// lookupPath walks a dotted path; `?.` returns nothing instead of failing.
 func lookupPath(path string, current *scope) (templateValue, error) {
 	segment, rest := nextSegment(strings.TrimSpace(path))
 	if segment.name == "" {
@@ -888,7 +871,7 @@ func lookupPath(path string, current *scope) (templateValue, error) {
 	return value, nil
 }
 
-// memberValue looks up a map key, a text index, or a loop field.
+// memberValue: map key, list index, or loop field.
 func memberValue(value templateValue, member string) (templateValue, bool) {
 	switch value.kind {
 	case valueMap:
@@ -915,7 +898,7 @@ func memberValue(value templateValue, member string) (templateValue, bool) {
 	}
 }
 
-// compiledTemplate caches a parsed template so repeated renders skip the parse.
+// compiledTemplate caches a parse so repeated renders skip it.
 type compiledTemplate struct {
 	nodes []node
 	err   error
@@ -926,7 +909,7 @@ var (
 	templateCache   = map[string]compiledTemplate{}
 )
 
-// compileTemplate parses a template once, since one config re-renders the same text repeatedly.
+// compileTemplate parses once; the same text re-renders for every plugin.
 func compileTemplate(text string) ([]node, error) {
 	templateCacheMu.RLock()
 	entry, ok := templateCache[text]

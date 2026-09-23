@@ -18,7 +18,6 @@ const (
 	statusWidth      = 10
 )
 
-// colorEnabled reports whether ANSI colors should be emitted for the requested mode.
 func colorEnabled(mode string, tty bool) bool {
 	switch mode {
 	case "always":
@@ -36,7 +35,6 @@ func colorEnabled(mode string, tty bool) bool {
 	}
 }
 
-// isTerminal reports whether w is a character device such as a TTY.
 func isTerminal(w io.Writer) bool {
 	file, ok := w.(*os.File)
 	if !ok {
@@ -49,14 +47,14 @@ func isTerminal(w io.Writer) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// colors formats diagnosis prefixes: bold magenta headers, bold cyan statuses, bold yellow warnings.
+// colors styles diagnostic output.
 type colors struct{ enabled bool }
 
 func newColors(mode string, diagnostics io.Writer) colors {
 	return colors{enabled: colorEnabled(mode, isTerminal(diagnostics))}
 }
 
-// writerColors builds colors for a writer under the current --color mode, honoring NO_COLOR and dumb terminals.
+// writerColors decides color per writer under the current --color mode.
 func writerColors(w io.Writer) colors {
 	return colors{enabled: colorEnabled(color, isTerminal(w))}
 }
@@ -91,7 +89,6 @@ func (c colors) error(prefix string) string {
 	return ansiErrorColor + prefix + ansiReset
 }
 
-// success styles text as a confirmation, such as a check mark or an ok state.
 func (c colors) success(text string) string {
 	if !c.enabled {
 		return text
@@ -99,7 +96,7 @@ func (c colors) success(text string) string {
 	return ansiSuccessColor + text + ansiReset
 }
 
-// warn styles text as a warning without the status-column alignment.
+// warn is the warning style without status-column padding.
 func (c colors) warn(text string) string {
 	if !c.enabled {
 		return text
@@ -107,7 +104,6 @@ func (c colors) warn(text string) string {
 	return ansiWarningColor + text + ansiReset
 }
 
-// dim styles text as a secondary detail, such as a file path or a hint.
 func (c colors) dim(text string) string {
 	if !c.enabled {
 		return text
@@ -115,9 +111,7 @@ func (c colors) dim(text string) string {
 	return ansiDimColor + text + ansiReset
 }
 
-// styledLines wraps w so every complete line is emitted in style, for writers that
-// format plain text themselves (subprocess diagnostics). nil stays nil and a
-// non-terminal writer is left uncolored.
+// styledLines colors each complete line for plain-text writers (subprocess diagnostics); nil stays nil.
 func styledLines(w io.Writer, style string) io.Writer {
 	if w == nil {
 		return nil
@@ -125,7 +119,6 @@ func styledLines(w io.Writer, style string) io.Writer {
 	return lineWriter{dst: w, style: style, on: colorEnabled(color, isTerminal(w))}
 }
 
-// lineWriter applies a style to each written line, resetting before every newline.
 type lineWriter struct {
 	dst   io.Writer
 	style string

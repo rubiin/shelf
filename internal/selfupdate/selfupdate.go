@@ -18,17 +18,16 @@ import (
 	"strings"
 )
 
-// apiBase is the GitHub API root; a variable so tests can point it at a fake server.
+// apiBase is a variable so tests can swap in a fake server.
 var apiBase = "https://api.github.com"
 
-// client sends a minimal User-Agent, which the GitHub API requires.
 var client = &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
 
 // Options configures one self-update run.
 type Options struct {
-	// CurrentVersion is the running binary's version; "dev" or empty refuses without Force.
+	// CurrentVersion is the running version; "dev" or empty requires Force.
 	CurrentVersion string
-	// Target is the binary path to replace; it defaults to the running executable.
+	// Target defaults to the running executable.
 	Target string
 	// Force updates a development build to the latest release.
 	Force bool
@@ -36,11 +35,11 @@ type Options struct {
 	Diagnostics io.Writer
 }
 
-// Result reports what one self-update run did.
+// Result is the outcome of an update run.
 type Result struct {
 	// Updated reports whether the binary was replaced.
 	Updated bool
-	// Previous and Next name the versions around an update; Previous stays "" for dev builds.
+	// Previous and Next bracket the update; Previous is "" for dev builds.
 	Previous string
 	Next     string
 }
@@ -51,17 +50,14 @@ type asset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-// release is the part of the GitHub release payload self-update reads.
-// The tags match GitHub's snake_case keys: without them encoding/json would not
-// match "tag_name" or "browser_download_url" to these fields and they would
-// decode empty.
+// release is the part of the GitHub release payload we read. Tags must match
+// GitHub's snake_case keys or the fields decode empty.
 type release struct {
 	TagName string  `json:"tag_name"`
 	Assets  []asset `json:"assets"`
 }
 
-// archiveName returns the GoReleaser archive name for a platform, matching the
-// name_template in .goreleaser.yaml, which titles the OS and renames x86_64 amd64.
+// archiveName mirrors the name_template in .goreleaser.yaml.
 func archiveName(goos, goarch string) (string, error) {
 	switch goos {
 	case "linux", "darwin":
@@ -79,13 +75,11 @@ func archiveName(goos, goarch string) (string, error) {
 	default:
 		return "", fmt.Errorf("self-update has no release archive for %s/%s", goos, goarch)
 	}
-	// GoReleaser's template titles the OS ({{ title .Os }}); goos is "linux"/"darwin", so a
-	// first-letter capitalization is exact and avoids strings.Title, which is deprecated.
+	// {{ title .Os }} is just first-letter capitalization; strings.Title is deprecated.
 	return "shelf_" + strings.ToUpper(goos[:1]) + goos[1:] + "_" + arch + ".tar.gz", nil
 }
 
-// Update fetches the latest release and, when it differs from the current version,
-// replaces the target binary after verifying its sha256 against checksums.txt.
+// Update replaces target with the latest release after verifying its sha256.
 func Update(ctx context.Context, options Options) (Result, error) {
 	if options.Target == "" {
 		executable, err := os.Executable()
@@ -139,7 +133,7 @@ func Update(ctx context.Context, options Options) (Result, error) {
 	return Result{Updated: true, Previous: options.CurrentVersion, Next: next}, nil
 }
 
-// displayVersion names an empty version for error messages.
+// displayVersion prints an empty version as "dev".
 func displayVersion(version string) string {
 	if version == "" {
 		return "dev"
@@ -183,9 +177,7 @@ func assetURL(latest release, name string) (string, bool) {
 	return "", false
 }
 
-// checksumsURL returns the release's checksums asset. GoReleaser names the file
-// "<project>_<version>_checksums.txt" by default, so the exact name is tried
-// first and any asset ending in "checksums.txt" is accepted as a fallback.
+// checksumsURL prefers the exact GoReleaser name, then any "*checksums.txt" asset.
 func checksumsURL(latest release) (string, bool) {
 	if url, ok := assetURL(latest, "checksums.txt"); ok {
 		return url, true
@@ -231,7 +223,7 @@ func verifyChecksum(ctx context.Context, url, name string, contents []byte) erro
 	actual := hex.EncodeToString(digest[:])
 	for _, line := range strings.Split(string(listing), "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
-		// sha256sum writes "<digest>  <name>" with a two-space separator; a line's last field is the file name.
+		// sha256sum uses two spaces, so the last field is the file name.
 		if len(fields) == 2 && fields[1] == name {
 			if fields[0] == actual {
 				return nil
@@ -272,11 +264,8 @@ func extractBinary(archive []byte) ([]byte, error) {
 	}
 }
 
-// checkWritable verifies that the replacement binary can be installed next to
-// target: the install renames a sibling temp file over target, so the target's
-// directory must allow creating one. It runs before the release download so a
-// package-managed install (e.g. /usr/bin) fails fast with an actionable error
-// instead of a bare permission-denied after the download and verification work.
+// checkWritable fails fast, before the download, so a package-managed install
+// gets an actionable error instead of a bare permission-denied.
 func checkWritable(target string) error {
 	directory := filepath.Dir(target)
 	temporary, err := os.CreateTemp(directory, ".shelf-update-*")
@@ -289,8 +278,7 @@ func checkWritable(target string) error {
 	return nil
 }
 
-// installBinary writes contents to a sibling temp file and renames it over target,
-// so a crash or a failed write leaves the previous binary in place.
+// installBinary renames a temp file over target, so a crash leaves the old binary intact.
 func installBinary(target string, contents []byte) error {
 	temporary, err := os.CreateTemp(filepath.Dir(target), ".shelf-update-*")
 	if err != nil {
@@ -312,7 +300,6 @@ func installBinary(target string, contents []byte) error {
 	return os.Rename(temporaryName, target)
 }
 
-// logf writes a progress line when diagnostics are enabled.
 func logf(diagnostics io.Writer, format string, arguments ...any) {
 	if diagnostics == nil {
 		return

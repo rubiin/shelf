@@ -12,7 +12,7 @@ type Paths struct {
 	ConfigFile      string
 }
 
-// ResolvePaths resolves the config paths: the config file is config.toml, and a config file without a directory puts the config directory at its parent.
+// ResolvePaths fills in the config and data paths, defaulting to XDG locations.
 func ResolvePaths(home, configDirectory, dataDirectory, configFile string) (Paths, error) {
 	if home == "" {
 		return Paths{}, errors.New("home directory is empty")

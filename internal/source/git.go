@@ -31,7 +31,7 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		if err := ensureDir(filepath.Dir(directory)); err != nil {
 			return Installed{}, err
 		}
-		// Fresh installs shallow-clone the requested ref's tip; a depth-limited clone may not reach a pinned bare SHA, so fall back to a full clone. CloneOpts pass through, and depth 0 is a full clone.
+		// Shallow by default; a pinned SHA can sit beyond the depth, so a failed clone retries full.
 		args := []string{"clone"}
 		args = append(args, request.CloneOpts...)
 		if request.Depth == nil {
@@ -61,7 +61,7 @@ func installGit(ctx context.Context, directory string, request Request) (Install
 		}
 	}
 	if ref != "" {
-		// A shallow clone may not hold a pinned revision reached after its tip; check locally and fetch the missing object before checkout.
+		// A shallow clone may not hold the pinned revision; fetch the object first.
 		if err := runGitIn(ctx, directory, "cat-file", "-e", ref+"^{commit}"); err != nil {
 			if err := runGitIn(ctx, directory, "fetch", "--depth", "1", "origin", ref); err != nil {
 				return Installed{}, err

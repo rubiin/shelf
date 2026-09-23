@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <em>Modern, fast, configurable shell plugin manager for both bash and zsh heavily inspired from sheldon, zinit and zplug.</em>
+  <em>A fast, configurable shell plugin manager for bash and zsh, inspired by sheldon, zinit, and zplug.</em>
 </p>
 
 <p align="center">
@@ -20,15 +20,15 @@
 ## Features
 
 - Git, GitHub, Gist, GitLab, Bitbucket, Codeberg, remote, local, and inline plugins.
-- Optional local plugins
-- Frozen pins: `frozen = true` keeps a plugin's installed version until `--force` or `--reinstall`.
-- Pin plugins to a branch, tag, or revision, with `https`, `git`, or `ssh`.
-- Per-plugin `cloneopts` and clone `depth` for Git sources, recorded in the lock.
+- Optional local plugins.
+- Frozen pins: `frozen = true` holds a plugin's version until `--force` or `--reinstall`.
+- Pin any plugin to a branch, tag, or revision, with `https`, `git`, or `ssh`.
+- Per-plugin `cloneopts` and clone `depth` for Git sources.
 - Bash and Zsh output with per-plugin file globs (`use`) and exclusions (`ignore`).
 - Profiles, an `[env]` block, and custom apply templates.
-- Locked installs with a revision manifest for reproducible setups.
+- A revision manifest for reproducible installs.
 - Concurrent installs, automatic cleanup of removed plugins, and `update`/`reinstall`/`relock`.
-- Fast startup and rendering — about twice as fast as Sheldon.
+- About twice as fast as Sheldon.
 - XDG-compliant paths with `SHELF_*` environment variables and shell completions.
 
 ## Installation
@@ -118,9 +118,9 @@ shelf lock
 eval "$(shelf source)"
 ```
 
-Add the `eval` command to `.bashrc` or `.zshrc`. Re-run `shelf lock` after
-changing `config.toml`; keep `shelf source` for your shell startup file. It
-prints shell code to stdout and diagnostics to stderr.
+Put the `eval` line in `.bashrc` or `.zshrc`. Re-run `shelf lock` after editing
+`config.toml`; `shelf source` stays in your startup file. It prints shell code
+to stdout and diagnostics to stderr.
 
 ## Build and test
 
@@ -134,12 +134,12 @@ go vet ./...
 
 ## Benchmarks
 
-`scripts/bench-vs-sheldon.sh` compares `shelf source` with `sheldon source`. It
-builds shelf, writes one config into a temporary `HOME` that both tools read,
-locks both, checks that the rendered script is identical, and then measures
-three commands with [hyperfine](https://github.com/sharkdp/hyperfine): process
-startup, `source` with a warm lock, and `eval "$(… source)"` in a shell. Your
-real config and data directories are never touched.
+`scripts/bench-vs-sheldon.sh` compares `shelf source` with `sheldon source`:
+it builds shelf, writes one config into a temporary `HOME` both tools read,
+locks both, checks the rendered scripts match, then times process startup,
+`source` with a warm lock, and `eval "$(… source)"` with
+[hyperfine](https://github.com/sharkdp/hyperfine). Your real config and data
+directories are never touched.
 
 ```sh
 just bench              # 20 plugins, 100 runs
@@ -291,28 +291,27 @@ cloneopts = ["--single-branch", "--filter=blob:none"]
 
 `depth` and `cloneopts` apply to fresh installs; use `shelf lock
 --reinstall` or `shelf source --relock` to re-clone an already installed source
-with new options. Both are recorded in the runtime lock, so reinstalls keep the
-exact clone behavior.
+with new options.
 
 A plugin with `frozen = true` keeps its installed version: `shelf update`,
 `shelf lock --update`, and `shelf source --update` skip fetching it, and its
 status shows `Frozen` instead of `Checked`. `shelf lock --reinstall`,
 `shelf source --reinstall`, or `--force` with an update still refreshes it.
-`frozen = true` is recorded in the runtime lock and is safe on `inline`
-plugins, which have no source to fetch.
+Frozen is recorded in the lock and does nothing on `inline` plugins, which have
+no source to fetch.
 
 `remote` downloads are conditional after the first lock: the response's `ETag`
 is recorded in the runtime lock, and later `shelf lock`, `shelf source`, and
-`shelf update` runs send it as `If-None-Match`. A `304 Not Modified` answer skips
-re-downloading the unchanged file entirely.
+`shelf update` runs send it as `If-None-Match`. A `304 Not Modified` answer
+skips re-downloading an unchanged file.
 
 A plugin that needs a compile or generation step before its shell files can be
 sourced sets `build` to a list of shell commands, run in the repository root when
 the lock is built (fresh install, update, reinstall, or a stale relock from
 `shelf source`). File selection runs afterward, so `use` globs can pick up
 generated files. Build output goes to stderr and is suppressed by `--quiet`; a
-non-zero exit fails the lock. `build` requires a directory source — it is
-rejected on `inline` and `remote` sources — and applies only to plugins active in
+non-zero exit fails the lock. `build` requires a directory source: it is
+rejected on `inline` and `remote` sources, and applies only to plugins active in
 the selected profile.
 
 ```toml
@@ -333,25 +332,49 @@ when its path does not exist.
 A plugin with `profiles = ["work"]` loads only when `--profile work` or
 `SHELF_PROFILE=work` is set. Plugins without `profiles` always load. Shelf
 warns when a selected profile matches no configured plugin, which catches most
-profile typos without preventing unprofiled plugins from loading.
+profile typos without blocking unprofiled plugins.
 
-Templates engine: `{{ value }}` expressions with `| nl` filters,
+The template engine: `{{ value }}` expressions with `| nl` filters,
 `{% if %} … {% else if %} … {% else %} … {% endif %}` conditionals, and
 `{% for file in files %}` loops that nest and expose `loop.index`,
 `loop.first`, and `loop.last`. Maps such as `hooks` iterate with two
 variables: `{% for name, value in hooks %}`. Lookups fail on a missing value
 unless it is written optionally, as in `{{ hooks?.pre }}`.
 
+Shelf ships two built-in apply templates, `defer` and `zcompile`. Define other
+templates in `[templates]`:
+
 ```toml
 [templates]
-defer = "{{ hooks?.pre | nl }}{% for file in files %}zsh-defer source \"{{ file }}\"\n{% endfor %}{{ hooks?.post | nl }}"
+announce = "echo \"loading {{ name }}\"\n{% for file in files %}source \"{{ file }}\"\n{% endfor %}"
 ```
 
-Shelf ships a built-in `zcompile` apply template that combines the compile
-guard and the `source` lines in one template, like the `defer` example above:
-for every file a plugin loads it emits a guarded `zcompile` line — compiling on
-first load and recompiling whenever the source is newer than its compiled
-`.zwc` — then sources the file, which zsh auto-loads from the fresh bytecode:
+The built-in `defer` template defers each file until zle is idle right after
+the first prompt, keeping startup fast when a plugin is slow:
+
+```toml
+[plugins.slow]
+github = "user/slow-plugin"
+apply = ["defer"]
+```
+
+For zsh this schedules one `source "<file>"` per file, with the plugin's
+`hooks` still running immediately. Shelf embeds its own tiny scheduler in the
+rendered script, so no external helper is needed: it queues each file's source
+and runs the queue when zle first goes idle. The scheduler is defined once,
+guarded against redefinition, and only appears when a plugin uses `defer`.
+Non-interactive zsh never draws a prompt, so there the queue is never drained
+and deferred plugins stay unloaded, the same as any prompt-triggered loading.
+
+Bash has no prompt-time deferral, so there the built-in `defer` template
+degrades to plain `source` lines and plugins load immediately. One config works
+in both shells.
+
+The built-in `zcompile` template combines the compile guard and the `source`
+lines in one template: for every file a plugin loads it emits a guarded
+`zcompile` line, compiling on first load and recompiling whenever the source is
+newer than its compiled `.zwc`, then sources the file, which zsh auto-loads
+from the fresh bytecode:
 
 ```toml
 [plugins.demo]
@@ -361,10 +384,9 @@ apply = ["zcompile"]
 
 zsh's `-ot` test is false when the `.zwc` does not exist yet, so the guard
 checks `! -e` first to bootstrap the first compile. Bash has no `zcompile`
-builtin, so there the template degrades to plain `source` lines: plugins load
-normally, nothing is compiled, and one config works in both shells. Templates
-and `apply` lists are recorded in the lock: run `shelf lock` after enabling
-`zcompile` so a stale lock picks it up.
+builtin, so there the template degrades to plain `source` lines and plugins just
+load. Templates and `apply` lists are recorded in the lock, so run `shelf lock`
+after enabling `zcompile` or `defer`.
 
 Bare `{name}`, `{dir}`, `{file}`, and `{nl}` placeholders remain available as a
 shelf extension for templates without `{{ }}` or `{% %}` blocks.
@@ -383,12 +405,12 @@ $XDG_DATA_HOME/shelf/plugins.lock
 $XDG_DATA_HOME/shelf/plugins.<profile>.lock
 ```
 
-`source` verifies the runtime lock context and selected files. It regenerates
-the lock when the configuration, profile, shell, or installed files changed.
-Commands take a shared lock on the configuration directory while reading and
-an exclusive lock while writing, so concurrent shells wait instead of racing.
-Installed sources that are no longer configured are pruned by `lock`, by
-`update`, and by `source` when it relocks.
+`source` verifies the runtime lock context and selected files, regenerating it
+when the configuration, profile, shell, or installed files change. Commands take
+a shared lock on the configuration directory while reading and an exclusive lock
+while writing, so concurrent shells wait instead of racing. Installed sources
+that are no longer configured are pruned by `lock`, `update`, and `source` when
+it relocks.
 
 ### Revision lockfiles
 
@@ -406,12 +428,11 @@ It holds only Git-based plugin names and resolved revisions, so commit it with
 `shelf lock --update` and `shelf update --lock` fetch current ones and refresh
 the manifest. Local, remote, and inline plugins are intentionally omitted.
 
-The runtime lock under the data directory is not meant for version control —
+The runtime lock under the data directory is not meant for version control:
 commit the revision manifest instead.
 
 Diagnostics go to stderr: `Loaded` and `Locked` headers, right-aligned
-`Checked`, `Frozen`, and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and
-`Removed` when `--verbose` is set. A failed command prints `error:` and exits
+`Checked`, `Frozen`, and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and `Removed` when `--verbose` is set. A failed command prints `error:` and exits
 with status 2.
 
 ## Examples
@@ -434,8 +455,8 @@ Reinstall all sources:
 shelf lock --reinstall
 ```
 
-Reload the current shell after changing the configuration (replace it with a
-fresh one so startup files re-run, like `omz reload`):
+Reload the current shell after changing the configuration (it replaces the
+shell with a fresh one so startup files re-run, like `omz reload`):
 
 ```sh
 shelf reload

@@ -29,16 +29,16 @@ type Request struct {
 	File      string
 	Update    bool
 	Reinstall bool
-	// Frozen pins the installed version: an update skips fetching a frozen source unless forced.
+	// Frozen pins the installed version; updates skip fetching it.
 	Frozen bool
-	// ETag is the validator recorded in the previous lock; when set, a remote download becomes a conditional GET.
+	// ETag from the previous lock; makes the next download a conditional GET.
 	ETag string
-	// CloneOpts are extra arguments passed to git clone; Depth sets --depth (nil keeps the shallow default, 0 clones full history).
+	// CloneOpts are extra git clone args; Depth sets --depth (nil = shallow default, 0 = full history).
 	CloneOpts []string
 	Depth     *int
 }
 
-// gitURL builds the clone URL the way from `proto`: a scheme prefix, then host/repository.
+// gitURL builds the clone URL: proto scheme prefix + host/repository.
 func gitURL(request Request) string {
 	if request.Git != "" {
 		return request.Git
@@ -71,12 +71,12 @@ func gitURL(request Request) string {
 
 type Installed struct {
 	Directory string
-	// Root is the plugin's source root before dir narrowing; build hooks run here.
+	// Root is the source root before dir narrowing; build hooks run here.
 	Root     string
 	File     string
 	Revision string
 	Skipped  bool
-	// ETag is the remote response validator, recorded in the lock so the next update fetches conditionally.
+	// ETag recorded in the lock so the next update fetches conditionally.
 	ETag string
 }
 
@@ -88,10 +88,10 @@ type installer struct{ dataDir string }
 
 func NewInstaller(dataDir string) Installer { return installer{dataDir: dataDir} }
 
-// CloneURL resolves the URL a git source clones from, so a lock can record it.
+// CloneURL resolves a git source's clone URL for the lock to record.
 func CloneURL(request Request) string { return gitURL(request) }
 
-// installLocks serializes installs into one directory, which two plugins sharing a source can target.
+// installLocks serializes installs into the same directory; plugins can share a source.
 var installLocks sync.Map
 
 func lockInstall(directory string) func() {
@@ -125,13 +125,13 @@ func (i installer) Install(ctx context.Context, request Request) (Installed, err
 	}
 }
 
-// CloneDir is the directory git sources are cloned into.
+// CloneDir is where git sources are cloned (dataDir/repos).
 func CloneDir(dataDir string) string { return filepath.Join(dataDir, "repos") }
 
-// DownloadDir is the directory remote sources are downloaded into.
+// DownloadDir is where remote sources land (dataDir/downloads).
 func DownloadDir(dataDir string) string { return filepath.Join(dataDir, "downloads") }
 
-// GitDirectory is a git source's clone directory: <clone dir>/<host>/<repo path>; a hostless source keeps its path below the clone directory.
+// GitDirectory is <clone dir>/<host>/<repo path>; a hostless source drops the host.
 func GitDirectory(dataDir string, request Request) (string, error) {
 	rawURL := gitURL(request)
 	parsed, err := url.Parse(rawURL)
@@ -149,7 +149,7 @@ func GitDirectory(dataDir string, request Request) (string, error) {
 	return filepath.Join(append(segments, filepath.FromSlash(relative))...), nil
 }
 
-// RemoteDirectory is a remote source's download directory and file: <download dir>/<host>/<path>.
+// RemoteDirectory is <download dir>/<host>/<path>, returned as directory + file.
 func RemoteDirectory(dataDir, rawURL string) (string, string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -174,7 +174,7 @@ func RemoteDirectory(dataDir, rawURL string) (string, string, error) {
 
 func ensureDir(path string) error { return os.MkdirAll(path, 0o755) }
 
-// sourceDirectory resolves a plugin's dir narrowing below its source root, rejecting any path that escapes it.
+// sourceDirectory resolves dir under root, rejecting paths that escape it.
 func sourceDirectory(root, directory string) (string, error) {
 	if directory == "" || directory == "." {
 		return filepath.Clean(root), nil

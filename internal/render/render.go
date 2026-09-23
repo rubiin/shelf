@@ -8,7 +8,7 @@ import (
 	"shelf/internal/lock"
 )
 
-// PluginData holds the values one plugin's templates can reference.
+// PluginData is what one plugin's templates can reference.
 type PluginData struct {
 	Name      string
 	Directory string
@@ -17,7 +17,7 @@ type PluginData struct {
 	Hooks     map[string]string
 }
 
-// ResolveTemplates layers configured templates over the shell's built-in ones.
+// ResolveTemplates returns the shell's built-ins overridden by extra templates.
 func ResolveTemplates(shell string, extra ...map[string]string) map[string]string {
 	templates := map[string]string{}
 	for name, value := range BuiltinTemplates(shell) {
@@ -31,12 +31,12 @@ func ResolveTemplates(shell string, extra ...map[string]string) map[string]strin
 	return templates
 }
 
-// Script renders the shell code for a locked config, applying each plugin's templates.
+// Script renders a locked config into shell code.
 func Script(locked lock.LockedConfig, shell string, custom ...map[string]string) (string, error) {
 	if shell != "bash" && shell != "zsh" {
 		return "", fmt.Errorf("unsupported shell: %s", shell)
 	}
-	// Templates resolved at lock time are authoritative, so they are used as they are.
+	// Lock-time templates win over built-ins and custom ones.
 	merged := locked.Templates
 	if len(merged) == 0 || len(custom) > 0 {
 		merged = ResolveTemplates(shell, custom...)
@@ -46,22 +46,24 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 	}
 
 	var output scriptBuffer
-	// A rough output estimate saves the buffer from growing one chunk at a time.
 	output.Grow(64 * len(locked.Plugins))
 	for _, name := range sortedEnvironmentNames(locked.Env) {
-		// Assignments run in the current shell, so they are written directly without an extra parse pass per variable.
+		// Env assignments run directly in the current shell, so they need no eval wrapper.
 		output.WriteString(name)
 		output.WriteString("=")
 		output.WriteString(locked.Env[name])
 		output.WriteString("\n")
 	}
-	// One plugin scope is reused for the whole script: it is reset per plugin, not reallocated.
+	// The defer template queues sources into the scheduler defined here, so it must be emitted
+	// first. Bash and non-interactive runs degrade to plain source: no scheduler.
+	if shell == "zsh" && usesDefer(locked.Plugins) {
+		output.WriteString(shelfDeferPreamble)
+	}
 	var current scope
 	for _, plugin := range locked.Plugins {
 		var pluginOutput scriptBuffer
-		// A plugin chunk is rarely empty, so start its buffer with room to grow.
 		pluginOutput.Grow(128)
-		// An inline plugin's own text is the template, rendered with just its name and hooks.
+		// An inline plugin's text is its own template, with only name and hooks available.
 		if plugin.Inline != "" {
 			if err := renderInline(plugin, shell, &pluginOutput); err != nil {
 				return "", err
@@ -71,14 +73,14 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 			if len(apply) == 0 {
 				apply = []string{"source"}
 			}
-			// The scope is shared by every template the plugin applies.
+			// One scope serves all templates the plugin applies.
 			current = scope{plugin: pluginData(plugin), hasPlugin: true}
 			for _, name := range apply {
 				text, exists := merged[name]
 				if !exists {
 					return "", fmt.Errorf("unknown template: %s", name)
 				}
-				// An empty template (zsh's zcompile is empty under bash) contributes nothing.
+				// Empty templates (zcompile under bash) contribute nothing.
 				if text == "" {
 					continue
 				}
@@ -87,7 +89,7 @@ func Script(locked lock.LockedConfig, shell string, custom ...map[string]string)
 				}
 			}
 		}
-		// Each plugin is evaluated separately, so a whole-script `eval "$(shelf source)"` parses one plugin at a time and aliases stay real.
+		// Eval per plugin: a single whole-script parse would not pick up aliases defined along the way.
 		output.WriteString("eval ")
 		output.WriteString(quoteShell(pluginOutput.String()))
 		output.WriteString("\n")
@@ -104,11 +106,25 @@ func sortedEnvironmentNames(environment map[string]string) []string {
 	return names
 }
 
+// usesDefer: inline plugins carry their own text and never use the scheduler.
+func usesDefer(plugins []lock.LockedPlugin) bool {
+	for _, plugin := range plugins {
+		if plugin.Inline != "" {
+			continue
+		}
+		for _, name := range plugin.Apply {
+			if name == "defer" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func quoteShell(text string) string {
 	return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'"
 }
 
-// renderChunk renders one template, appending a newline when the chunk does not end with one.
 func renderChunk(name, text string, current *scope, output *scriptBuffer) error {
 	before := output.Len()
 	if err := renderTemplateText(name, text, current, output); err != nil {
@@ -118,7 +134,8 @@ func renderChunk(name, text string, current *scope, output *scriptBuffer) error 
 	return nil
 }
 
-// renderInline renders an inline plugin's text: bash evals it directly, while zsh sources it over stdin because zsh parses an eval'd string whole and would lose aliases defined on earlier lines.
+// renderInline: bash evals the text directly; zsh sources it over stdin because zsh parses an
+// eval'd string as a whole and would lose aliases defined on earlier lines.
 func renderInline(plugin lock.LockedPlugin, shell string, output *scriptBuffer) error {
 	before := output.Len()
 	current := pluginScope(PluginData{Name: plugin.Name, Hooks: plugin.Hooks})
@@ -142,7 +159,7 @@ func renderInline(plugin lock.LockedPlugin, shell string, output *scriptBuffer) 
 	return nil
 }
 
-// heredocDelimiter picks a heredoc end marker that cannot appear as a full line of the quoted-heredoc text.
+// heredocDelimiter picks a marker that is not a full line of the text.
 func heredocDelimiter(text string) string {
 	for index := 0; ; index++ {
 		delimiter := fmt.Sprintf("SHELF_%d", index)
@@ -152,7 +169,6 @@ func heredocDelimiter(text string) string {
 	}
 }
 
-// containsLine reports whether text contains a full line equal to the given line.
 func containsLine(text, line string) bool {
 	for _, candidate := range strings.Split(text, "\n") {
 		if candidate == line {
@@ -162,19 +178,17 @@ func containsLine(text, line string) bool {
 	return false
 }
 
-// finishChunk appends a newline when a rendered chunk is empty or does not end with one.
 func finishChunk(before int, output *scriptBuffer) {
 	if output.Len() == before || output.Last() != '\n' {
 		output.WriteString("\n")
 	}
 }
 
-// pluginData converts a locked plugin into the values its templates can reference.
 func pluginData(plugin lock.LockedPlugin) PluginData {
 	return PluginData{Name: plugin.Name, Directory: plugin.Directory, Files: plugin.Files, Hooks: plugin.Hooks}
 }
 
-// renderTemplateText renders a template body, expanding `{file}` templates once per file.
+// renderTemplateText expands {file} once per file.
 func renderTemplateText(name, text string, current *scope, output *scriptBuffer) error {
 	if strings.Contains(text, "{{") || strings.Contains(text, "{%") {
 		return renderCompiledTemplate(name, text, current, output)
@@ -195,7 +209,6 @@ func renderTemplateText(name, text string, current *scope, output *scriptBuffer)
 	return nil
 }
 
-// renderCompiledTemplate renders a parsed template into the script buffer.
 func renderCompiledTemplate(name, text string, current *scope, output *scriptBuffer) error {
 	nodes, err := compileTemplate(text)
 	if err != nil {
@@ -207,7 +220,7 @@ func renderCompiledTemplate(name, text string, current *scope, output *scriptBuf
 	return nil
 }
 
-// Template renders a template body with the plugin's values, caching the parsed template.
+// Template renders text with the plugin's values.
 func Template(name, text string, data PluginData) (string, error) {
 	if !strings.Contains(text, "{{") && !strings.Contains(text, "{%") {
 		return expandPlaceholders(text, data), nil
@@ -219,7 +232,7 @@ func Template(name, text string, data PluginData) (string, error) {
 	return output.String(), nil
 }
 
-// expandPlaceholders substitutes {name}, {dir}, {file}, and {nl} without building a Replacer.
+// expandPlaceholders handles {name}, {dir}, {file}, and {nl} without a Replacer.
 func expandPlaceholders(text string, data PluginData) string {
 	if !strings.ContainsRune(text, '{') {
 		return text

@@ -50,9 +50,9 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 	var matched []string
 	for _, pattern := range patterns {
 		rendered := strings.ReplaceAll(pattern, "{{ name }}", name)
-		// Clean like the glob walk did, so patterns such as `./*.zsh` still match relative paths.
+		// Clean like the walk output so `./*.zsh` still matches relative paths.
 		rendered = path.Clean(rendered)
-		// Validate up front so a typo fails even when the tree holds no candidates.
+		// Validate up front so a typo fails even with no candidates.
 		if !doublestar.ValidatePattern(rendered) {
 			return nil, fmt.Errorf("invalid pattern: %s", pattern)
 		}
@@ -71,12 +71,12 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 			break
 		}
 	}
-	// The ignore pass drops files the selection matched, so test trees never load.
+	// Drop ignored matches so test trees never load.
 	matched, err = dropIgnored(matched, name, ignored)
 	if err != nil {
 		return nil, err
 	}
-	// Every pattern is walked together, so the selection is ordered by file name.
+	// Patterns match together, so results are ordered by file name.
 	sort.SliceStable(matched, func(left, right int) bool {
 		return filepath.Base(matched[left]) < filepath.Base(matched[right])
 	})
@@ -93,9 +93,7 @@ func selectFiles(directory, name, shell string, patterns []string, firstMatch bo
 	return files, nil
 }
 
-// dropIgnored filters matched relative paths against the ignore globs, substituting `{{ name }}`
-// exactly like the use patterns do. Patterns are validated up front so a typo fails even when the
-// selection is empty.
+// dropIgnored applies the same `{{ name }}` substitution and up-front validation as use patterns.
 func dropIgnored(matched []string, name string, ignored []string) ([]string, error) {
 	if len(ignored) == 0 {
 		return matched, nil
@@ -129,9 +127,9 @@ func dropIgnored(matched []string, name string, ignored []string) ([]string, err
 	return kept, nil
 }
 
-// collectFiles walks directory once and returns its non-directory paths, slash-separated.
+// collectFiles walks once, returning slash-separated relative paths.
 func collectFiles(directory string) ([]string, error) {
-	// Only a missing plugin directory is empty; every other walk failure is reported.
+	// A missing directory yields an empty selection; other failures are reported.
 	if _, err := os.Stat(directory); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -144,7 +142,7 @@ func collectFiles(directory string) ([]string, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			// A plugin's own git metadata can never match a source pattern, so skip it wholesale.
+			// .git can't match a source pattern; skip it entirely.
 			if entry.Name() == ".git" {
 				return fs.SkipDir
 			}

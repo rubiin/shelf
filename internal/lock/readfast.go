@@ -9,9 +9,9 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// The lock file is decoded on every shell start; this reader understands just the schema Write emits, giving up on anything unfamiliar so the general decoder can take over.
+// The lock is decoded on every shell start; this fast path handles only what Write emits
+// and bails to the general decoder on anything else.
 
-// lockTable is the table keys are currently being assigned into.
 type lockTable int
 
 const (
@@ -22,15 +22,14 @@ const (
 	tableTemplates
 )
 
-// fastLockParser reads lock contents into a LockedConfig, or reports that it cannot.
 type fastLockParser struct {
 	data   []byte
 	pos    int
 	locked LockedConfig
 	table  lockTable
-	// plugin is the index of the plugin the current table belongs to, or -1 before the first one.
+	// plugin indexes the current plugin table, or -1 before the first.
 	plugin int
-	// The bit masks and flags below track what has been defined, because TOML rejects a duplicate table or key.
+	// Masks and flags track defined keys; TOML rejects duplicates.
 	rootFields      uint8
 	pluginFields    uint16
 	pluginHooksSeen bool
@@ -38,7 +37,7 @@ type fastLockParser struct {
 	templatesSeen   bool
 }
 
-// parseLockFast reads a lock file's own schema, reporting false when the contents use something it does not handle.
+// parseLockFast reports false on anything outside the schema Write emits.
 func parseLockFast(data []byte) (LockedConfig, bool) {
 	parser := fastLockParser{data: data, plugin: -1}
 	if !parser.parse() {
@@ -55,7 +54,7 @@ func (p *fastLockParser) parse() bool {
 		if p.pos == len(p.data) {
 			return true
 		}
-		// A comment is valid TOML that this reader does not carry, so hand the file to the decoder.
+		// Write never emits comments; hand the file to the general decoder.
 		if p.data[p.pos] == '#' {
 			return false
 		}
@@ -71,7 +70,7 @@ func (p *fastLockParser) parse() bool {
 	}
 }
 
-// skipWhitespace advances past spaces and tabs, and past line breaks when wanted; a bare carriage return is not whitespace.
+// skipWhitespace advances past spaces/tabs and, when wanted, newlines; a bare \r fails.
 func (p *fastLockParser) skipWhitespace(lineBreaks bool) bool {
 	for p.pos < len(p.data) {
 		switch p.data[p.pos] {
@@ -97,7 +96,6 @@ func (p *fastLockParser) skipWhitespace(lineBreaks bool) bool {
 	return true
 }
 
-// endLine consumes the rest of the line, which may hold nothing but spaces.
 func (p *fastLockParser) endLine() bool {
 	if !p.skipWhitespace(false) {
 		return false
@@ -112,7 +110,6 @@ func (p *fastLockParser) endLine() bool {
 	return true
 }
 
-// parseTableHeader handles both "[table]" and "[[array.of.tables]]" headers.
 func (p *fastLockParser) parseTableHeader() bool {
 	p.pos++ // '['
 	arrayOfTables := false
@@ -159,10 +156,10 @@ func (p *fastLockParser) parseTableHeader() bool {
 			p.locked.Env = map[string]string{}
 		}
 	case "plugins":
-		// The encoder writes the array of tables form, so this is not a lock file it wrote.
+		// Write emits the array-of-tables form, so this isn't from Write.
 		return false
 	case "plugins.hooks":
-		// Two key parts are required: a quoted dot would name one literal key instead of a table.
+		// Needs two parts: a quoted dot names one literal key, not a table.
 		if parts != 2 || p.plugin < 0 || p.pluginHooksSeen {
 			return false
 		}
@@ -186,7 +183,7 @@ func (p *fastLockParser) parseTableHeader() bool {
 	return true
 }
 
-// parseKey reads a bare or quoted key with dotted parts, returning the joined name, part count, and whether a key was read.
+// parseKey reads a bare or quoted dotted key, returning the joined name and part count.
 func (p *fastLockParser) parseKey() (string, int, bool) {
 	var builder strings.Builder
 	parts := 0
@@ -259,7 +256,6 @@ func (p *fastLockParser) parseAssignment() bool {
 	return p.assignText(key, parts, text)
 }
 
-// assignText puts a string value in the field its table and key name.
 func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 	switch p.table {
 	case tableRoot:
@@ -299,7 +295,7 @@ func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 		case "directory":
 			plugin.Directory = text
 		default:
-			// files and apply are lists, so a string here is a different value, not this field.
+			// files and apply are lists; a string here is invalid.
 			return false
 		}
 	case tableEnv:
@@ -311,7 +307,7 @@ func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 		}
 		p.locked.Env[key] = text
 	case tableHooks:
-		// A dotted key would nest a table where a string is expected, which the decoder rejects.
+		// A dotted key would nest a table where the decoder expects a string.
 		if parts != 1 {
 			return false
 		}
@@ -334,7 +330,6 @@ func (p *fastLockParser) assignText(key string, parts int, text string) bool {
 	return true
 }
 
-// assignList puts a string list in the field its key names.
 func (p *fastLockParser) assignList(key string, parts int, items []string) bool {
 	if parts != 1 || p.table != tablePlugin || !p.claimPluginField(key) {
 		return false
@@ -351,7 +346,7 @@ func (p *fastLockParser) assignList(key string, parts int, items []string) bool 
 	return true
 }
 
-// claimPluginField records that a plugin key has been defined, reporting false for an unknown or duplicate key.
+// claimPluginField rejects unknown or duplicate keys.
 func (p *fastLockParser) claimPluginField(key string) bool {
 	bit, ok := pluginFieldBit(key)
 	if !ok || p.pluginFields&bit != 0 {
@@ -361,7 +356,6 @@ func (p *fastLockParser) claimPluginField(key string) bool {
 	return true
 }
 
-// rootFieldBit maps a top-level key to its seen mask, reporting false for an unknown key.
 func rootFieldBit(key string) (uint8, bool) {
 	switch key {
 	case "config_fingerprint":
@@ -376,7 +370,6 @@ func rootFieldBit(key string) (uint8, bool) {
 	return 0, false
 }
 
-// pluginFieldBit maps a plugin key to its seen mask, reporting false for an unknown key.
 func pluginFieldBit(key string) (uint16, bool) {
 	switch key {
 	case "name":
@@ -401,7 +394,7 @@ func pluginFieldBit(key string) (uint16, bool) {
 	return 0, false
 }
 
-// parseArray reads an array of strings, which may be broken across lines.
+// parseArray reads a string array, which may span lines.
 func (p *fastLockParser) parseArray() ([]string, bool) {
 	p.pos++ // '['
 	items := []string{}
@@ -436,9 +429,8 @@ func (p *fastLockParser) parseArray() ([]string, bool) {
 	}
 }
 
-// parseString reads one basic string, unescaping the escapes the encoder writes.
 func (p *fastLockParser) parseString() (string, bool) {
-	// A multiline string is valid TOML that the encoder never writes.
+	// Write never emits multiline strings.
 	if strings.HasPrefix(string(p.data[p.pos:min(p.pos+3, len(p.data))]), `"""`) {
 		return "", false
 	}
@@ -468,7 +460,7 @@ func (p *fastLockParser) parseString() (string, bool) {
 				p.pos++
 			}
 			run := p.data[start:p.pos]
-			// TOML rejects raw control characters and text that is not valid UTF-8.
+			// TOML forbids raw control characters and invalid UTF-8.
 			if !isPlainStringRun(run) {
 				return "", false
 			}
@@ -477,7 +469,6 @@ func (p *fastLockParser) parseString() (string, bool) {
 	}
 }
 
-// isPlainStringRun reports whether a run of bytes is legal inside a basic string.
 func isPlainStringRun(run []byte) bool {
 	ascii := true
 	for _, character := range run {
@@ -492,7 +483,6 @@ func isPlainStringRun(run []byte) bool {
 	return ascii || utf8.Valid(run)
 }
 
-// writeEscape appends the byte or rune an escape sequence stands for.
 func (p *fastLockParser) writeEscape(builder *strings.Builder) bool {
 	switch p.data[p.pos] {
 	case 'b':
@@ -531,8 +521,7 @@ func (p *fastLockParser) writeUnicodeEscape(builder *strings.Builder, digits int
 			return false
 		}
 	}
-	// The digits are known to be hex here, so the only errors left are a value above the max rune
-	// or a lone surrogate, either of which makes the fast reader bail so the general decoder takes over.
+	// Digits are already hex; only an oversize value or a surrogate can fail, bailing to the general decoder.
 	value, err := strconv.ParseUint(string(code), 16, 32)
 	if err != nil || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF) {
 		return false
@@ -548,7 +537,7 @@ func isHexByte(character byte) bool {
 		(character >= 'A' && character <= 'F')
 }
 
-// readLock decodes lock contents, preferring the schema-specific reader over the general decoder.
+// readLock prefers the fast reader, falling back to the general decoder.
 func readLock(contents []byte) (LockedConfig, error) {
 	if locked, ok := parseLockFast(contents); ok {
 		return locked, nil
@@ -560,7 +549,6 @@ func readLock(contents []byte) (LockedConfig, error) {
 	return locked, nil
 }
 
-// readLockFile reads and decodes a lock file.
 func readLockFile(path string) (LockedConfig, error) {
 	contents, err := os.ReadFile(path)
 	if err != nil {

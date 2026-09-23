@@ -28,16 +28,16 @@ type RawPlugin struct {
 	Dir       string   `toml:"dir"`
 	File      string   `toml:"file"`
 	Use       []string `toml:"use"`
-	// Ignore excludes files selected by use (or the shell defaults) from loading.
+	// Ignore excludes files that use (or the shell defaults) would load.
 	Ignore   []string          `toml:"ignore"`
 	Apply    []string          `toml:"apply"`
 	Build    []string          `toml:"build"`
 	Profiles []string          `toml:"profiles"`
 	Hooks    map[string]string `toml:"hooks"`
-	// Frozen pins the installed version: update leaves it alone unless forced or reinstalled.
+	// Frozen pins the installed version; update skips it unless forced.
 	Frozen bool `toml:"frozen"`
-	// CloneOpts are extra arguments passed to git clone for git, github, and gist sources.
+	// CloneOpts are extra arguments passed to git clone for git-backed sources.
 	CloneOpts []string `toml:"cloneopts"`
-	// Depth sets the git clone depth; nil keeps the shallow depth-1 default, 0 clones full history.
+	// Depth is the clone depth: nil = shallow (default), 0 = full history.
 	Depth *int `toml:"depth"`
 }

@@ -1,5 +1,5 @@
-// Package tui implements the interactive terminal prompts used by shelf commands:
-// the checkbox picker behind remove --interactive and the line prompts behind init.
+// Package tui implements shelf's interactive prompts: the checkbox picker behind
+// remove --interactive and the line prompts behind init.
 package tui
 
 import (
@@ -16,13 +16,13 @@ import (
 // ErrCancelled is returned when the user aborts the picker with q, escape, or ctrl+c.
 var ErrCancelled = errors.New("selection cancelled")
 
-// Terminal abstracts raw-mode control so the picker can be tested with scripted keystrokes.
+// Terminal abstracts raw-mode control so tests can script keystrokes.
 type Terminal interface {
 	MakeRaw(int) (*term.State, error)
 	Restore(int, *term.State) error
 }
 
-// IO carries the picker's input, output, and terminal control.
+// IO is the picker's input, output, and terminal hooks.
 type IO struct {
 	In      io.Reader
 	Out     io.Writer
@@ -116,7 +116,7 @@ func handleKey(in *bufio.Reader, key byte, options []string, checked []bool, cur
 }
 
 func handleEscape(in *bufio.Reader, options []string, checked []bool, cursor *int, redraw func()) (bool, error) {
-	// A lone ESC press leaves nothing buffered, so it cancels; terminals send ESC [ A as one burst.
+	// A lone ESC has nothing buffered and cancels; arrow keys arrive as ESC [ A in one burst.
 	if in.Buffered() == 0 {
 		return false, ErrCancelled
 	}
@@ -125,7 +125,7 @@ func handleEscape(in *bufio.Reader, options []string, checked []bool, cursor *in
 		return false, ErrCancelled
 	}
 	if prefix != '[' {
-		// Alt+key and other unrecognized prefixes are ignored, not treated as a cancel.
+		// Unrecognized prefixes (Alt+key) are ignored, not a cancel.
 		return false, nil
 	}
 	if in.Buffered() == 0 {
@@ -145,7 +145,7 @@ func handleEscape(in *bufio.Reader, options []string, checked []bool, cursor *in
 			*cursor++
 		}
 	default:
-		// Unsupported sequences (Home, End, shift-tab, ...) are ignored rather than cancelling.
+		// Unsupported sequences are ignored, not a cancel.
 		return false, nil
 	}
 	redraw()

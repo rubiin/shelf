@@ -23,15 +23,14 @@ import (
 const DefaultConcurrency = 8
 
 const (
-	// verifyParallelAt is the selected-file count above which verification runs wide.
-	verifyParallelAt = 16
-	// verifyConcurrency is the worker count used to check selected plugin files.
+	// Above this many selected files, verification runs in parallel.
+	verifyParallelAt  = 16
 	verifyConcurrency = 8
 )
 
 var errFileMissing = errors.New("selected plugin file is missing")
 
-// fingerprint returns the supplied config fingerprint, or computes it from ConfigFile.
+// Uses ConfigFingerprint when set, else hashes ConfigFile.
 func (ctx Context) fingerprint() string {
 	if ctx.ConfigFingerprint != "" {
 		return ctx.ConfigFingerprint
@@ -81,7 +80,7 @@ func BuildWithConcurrency(ctx Context, cfg config.Config, installer source.Insta
 	return locked, nil
 }
 
-// RunConcurrently runs work per index with at most concurrency workers, cancelling the rest on failure; callers needing every result simply never return an error.
+// RunConcurrently runs work per index with at most concurrency workers, stopping on the first error.
 func RunConcurrently(count, concurrency int, work func(ctx context.Context, index int) error) error {
 	if concurrency < 1 {
 		return fmt.Errorf("concurrency must be at least 1")
@@ -135,11 +134,11 @@ dispatch:
 }
 
 func buildPlugin(installContext context.Context, ctx Context, cfg config.Config, installer source.Installer, mode Mode, name string, plugin config.RawPlugin) (LockedPlugin, error) {
-	// Inline plugins have nothing to install: the lock carries their text and renders it.
+	// Inline plugins have no install step; the lock carries their text.
 	if plugin.Inline != "" {
 		return LockedPlugin{Name: name, Inline: plugin.Inline, Hooks: plugin.Hooks}, nil
 	}
-	// Frozen plugins keep their pinned version on update; --force and --reinstall still refresh them.
+	// Frozen plugins keep their pin on update; --force and --reinstall still refresh.
 	update := mode == ModeUpdate && (!plugin.Frozen || ctx.Force)
 	installed, err := installer.Install(installContext, source.Request{
 		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto, Remote: plugin.Remote,
@@ -166,7 +165,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	} else if installed.File != "" {
 		files = []string{installed.File}
 	} else {
-		// `use` lists every pattern to select from, while global matches stop at the first pattern that selects anything.
+		// `use` tries every pattern; global matches stop at the first pattern that selects anything.
 		patterns := plugin.Use
 		firstMatch := false
 		if len(patterns) == 0 {
@@ -191,7 +190,7 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 	return LockedPlugin{Name: name, Source: pluginSource(plugin), URL: pluginCloneURL(plugin), Rev: installed.Revision, ETag: installed.ETag, Directory: installed.Directory, Files: files, Apply: apply, Hooks: plugin.Hooks, CloneOpts: plugin.CloneOpts, Depth: plugin.Depth, Frozen: plugin.Frozen, Ignore: plugin.Ignore}, nil
 }
 
-// PluginETags maps each plugin's name to the remote validator its lock entry recorded, for a conditional GET on the next update.
+// PluginETags maps each plugin name to the ETag its lock entry recorded, for a conditional GET on the next update.
 func PluginETags(locked LockedConfig) map[string]string {
 	etags := make(map[string]string)
 	for _, plugin := range locked.Plugins {
@@ -202,7 +201,7 @@ func PluginETags(locked LockedConfig) map[string]string {
 	return etags
 }
 
-// runBuild executes each build command with the POSIX shell in the plugin's source root; shelf builds only the argv, never a concatenated shell string.
+// runBuild runs each command with sh -c in the plugin's source root.
 func runBuild(ctx context.Context, diagnostics io.Writer, name string, installed source.Installed, commands []string) error {
 	if len(commands) == 0 {
 		return nil
@@ -226,11 +225,11 @@ func runBuild(ctx context.Context, diagnostics io.Writer, name string, installed
 	return nil
 }
 
-// Restore reinstalls the revisions the lock pinned, using only the lock and the same worker pool as locking.
+// Restore reinstalls the pinned revisions using only the lock.
 func Restore(locked LockedConfig, installer source.Installer, concurrency int) error {
 	var tasks []LockedPlugin
 	for _, plugin := range locked.Plugins {
-		// Only git sources record a URL; a lock written before URLs were recorded is left as it is.
+		// Only git sources record a URL; older locks without one are skipped.
 		if plugin.Rev == "" || plugin.URL == "" {
 			continue
 		}
@@ -268,7 +267,7 @@ func isGit(plugin config.RawPlugin) bool {
 	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }
 
-// pluginCloneURL resolves a git source's clone URL, which the lock records so Restore needs no config.
+// pluginCloneURL resolves the clone URL recorded in the lock, so Restore needs no config.
 func pluginCloneURL(plugin config.RawPlugin) string {
 	if !isGit(plugin) {
 		return ""
@@ -361,7 +360,7 @@ func isRevisionSource(value string) bool {
 	return false
 }
 
-// Write encodes through a temp file and an atomic rename, so a crash cannot truncate the lock.
+// Write encodes to a temp file and renames atomically, so a crash can't truncate the lock.
 func Write(path string, locked LockedConfig) error {
 	return writeTOML(path, locked)
 }
@@ -391,7 +390,7 @@ func writeTOML(path string, value any) error {
 	return os.Rename(temporaryName, path)
 }
 
-// Read decodes a lock file, using the schema-specific reader when the contents match it.
+// Read decodes a lock file, using the schema-specific reader when it matches.
 func Read(path string) (LockedConfig, error) {
 	return readLockFile(path)
 }
@@ -416,9 +415,9 @@ func Verify(path string, ctx Context) (bool, error) {
 	return VerifyLocked(locked, ctx), nil
 }
 
-// VerifyLocked checks an already-read lock file against the context, avoiding a second read.
+// VerifyLocked checks an already-read lock against the context.
 func VerifyLocked(locked LockedConfig, ctx Context) bool {
-	// A lock without templates predates lock-recorded templates, so it is rebuilt once.
+	// A lock without templates predates them and must be rebuilt once.
 	if len(locked.Templates) == 0 {
 		return false
 	}
@@ -428,7 +427,6 @@ func VerifyLocked(locked LockedConfig, ctx Context) bool {
 	return selectedFilesExist(locked)
 }
 
-// selectedFilesExist reports whether every selected plugin file is still installed.
 func selectedFilesExist(locked LockedConfig) bool {
 	total := 0
 	for _, plugin := range locked.Plugins {
@@ -437,7 +435,7 @@ func selectedFilesExist(locked LockedConfig) bool {
 	if total == 0 {
 		return true
 	}
-	// A few stats are quicker inline; a shell with many plugins is quicker in parallel.
+	// Few stats are quicker inline; many are quicker in parallel.
 	if total < verifyParallelAt {
 		for _, plugin := range locked.Plugins {
 			for _, file := range plugin.Files {
@@ -461,13 +459,13 @@ func selectedFilesExist(locked LockedConfig) bool {
 	return missing == nil
 }
 
-// exists reports whether a path exists, without allocating a FileInfo for every check.
+// exists stats the path without allocating a FileInfo.
 func exists(path string) bool {
 	var status syscall.Stat_t
 	return syscall.Stat(path, &status) == nil
 }
 
-// Fingerprint returns the config fingerprint recorded in lock files.
+// Fingerprint is the hash lock files record as config_fingerprint.
 func Fingerprint(contents []byte) string {
 	hash := sha256.Sum256(contents)
 	return hex.EncodeToString(hash[:])

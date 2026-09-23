@@ -17,7 +17,8 @@ type Guard struct {
 	releaseError error
 }
 
-// Acquire locks the directory itself with flock, blocking while another process holds it; a missing directory is left unlocked and no lock file is created inside it.
+// Acquire blocks while another process holds the lock; a missing directory returns
+// nil, nil and no lock file is created.
 func Acquire(directory string, exclusive bool, warnings io.Writer) (*Guard, error) {
 	file, err := os.Open(directory)
 	if err != nil {
@@ -40,7 +41,7 @@ func Acquire(directory string, exclusive bool, warnings io.Writer) (*Guard, erro
 		operation = syscall.LOCK_EX
 	}
 	if err := syscall.Flock(int(file.Fd()), operation|syscall.LOCK_NB); err != nil {
-		// A nonblocking attempt reports EAGAIN (held) or EINTR (interrupted); both mean the lock is not ours yet.
+		// EAGAIN/EWOULDBLOCK mean the lock is held, EINTR means interrupted; retry blocking.
 		if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
 			_ = file.Close()
 			return nil, err
@@ -62,7 +63,7 @@ func Acquire(directory string, exclusive bool, warnings io.Writer) (*Guard, erro
 	return &Guard{file: file}, nil
 }
 
-// Release unlocks the guard; a nil guard or repeated release is a no-op returning the first result.
+// Release is safe on a nil guard or when called twice; the first result wins.
 func (guard *Guard) Release() error {
 	if guard == nil {
 		return nil

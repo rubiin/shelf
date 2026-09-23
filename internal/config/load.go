@@ -14,7 +14,7 @@ func Load(path string) (Config, error) {
 	return cfg, err
 }
 
-// LoadWithContents also returns the bytes it read, so callers need not read the config twice.
+// LoadWithContents also returns the bytes it read.
 func LoadWithContents(path string) (Config, []byte, error) {
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -127,7 +127,7 @@ func usesGitSource(plugin RawPlugin) bool {
 	return plugin.Git != "" || plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }
 
-// usesForgeSource reports whether the plugin is a git, github, gist, gitlab, bitbucket, or codeberg source, the shorthands for which proto picks a protocol.
+// usesForgeSource reports whether proto applies: the forge shorthands, not raw git/local URLs.
 func usesForgeSource(plugin RawPlugin) bool {
 	return plugin.GitHub != "" || plugin.Gist != "" || plugin.GitLab != "" || plugin.Bitbucket != "" || plugin.Codeberg != ""
 }

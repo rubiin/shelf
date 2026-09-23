@@ -4,14 +4,14 @@ import "io"
 
 type Context struct {
 	ConfigFile string
-	// ConfigFingerprint lets callers that already read the config skip a second read.
+	// ConfigFingerprint saves callers a second config read.
 	ConfigFingerprint string
 	DataDirectory     string
 	Profile           string
 	Shell             string
-	// Templates are the resolved apply templates, recorded so rendering needs no config read.
+	// Resolved apply templates, recorded so rendering needs no config read.
 	Templates map[string]string
-	// PreviousETags are the remote validators of the previous lock, keyed by plugin name; installs send them as If-None-Match.
+	// PreviousETags from the last lock, keyed by plugin name; installs send them as If-None-Match.
 	PreviousETags map[string]string
 	// Force refreshes frozen plugins during an update.
 	Force bool
@@ -34,7 +34,7 @@ type LockedConfig struct {
 	Shell             string            `toml:"shell"`
 	Env               map[string]string `toml:"env,omitempty"`
 	Plugins           []LockedPlugin    `toml:"plugins"`
-	// Templates must stay last: TOML tables and arrays of tables end the preceeding table.
+	// Must stay last: a table or array-of-tables header ends the preceding table.
 	Templates map[string]string `toml:"templates,omitempty"`
 }
 
@@ -50,23 +50,23 @@ type RevisionPlugin struct {
 
 type LockedPlugin struct {
 	Name string `toml:"name"`
-	// Inline holds an inline plugin's text, which is rendered instead of sourced from files.
+	// Inline is the plugin's text, rendered instead of sourced from files.
 	Inline string `toml:"inline,omitempty"`
 	Source string `toml:"source,omitempty"`
-	// URL is the resolved clone URL, which lets Restore reinstall the revision from the lock alone.
+	// URL is the resolved clone URL, so Restore works from the lock alone.
 	URL string `toml:"url,omitempty"`
 	Rev string `toml:"rev,omitempty"`
-	// ETag is a remote source's response validator, recorded so updates can fetch conditionally and skip an unchanged body.
+	// ETag lets the next update fetch conditionally and skip an unchanged body.
 	ETag      string            `toml:"etag,omitempty"`
 	Directory string            `toml:"directory,omitempty"`
 	Files     []string          `toml:"files,omitempty"`
 	Apply     []string          `toml:"apply,omitempty"`
 	Hooks     map[string]string `toml:"hooks,omitempty"`
-	// CloneOpts and Depth record the clone behavior so Restore reinstalls identically.
+	// CloneOpts and Depth make Restore clone the same way.
 	CloneOpts []string `toml:"cloneopts,omitempty"`
 	Depth     *int     `toml:"depth,omitempty"`
-	// Frozen records that the plugin keeps its pinned version on update.
+	// Frozen keeps the plugin on its pinned version during update.
 	Frozen bool `toml:"frozen,omitempty"`
-	// Ignore records the globs that excluded files from the selection, so re-locks and info see the same view.
+	// Ignore persists the ignore globs for later locks and info.
 	Ignore []string `toml:"ignore,omitempty"`
 }
