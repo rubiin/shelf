@@ -15,6 +15,9 @@ type Context struct {
 	PreviousETags map[string]string
 	// Force refreshes frozen plugins during an update.
 	Force bool
+	// Selected names the plugins an interactive update refreshes; nil means all.
+	// Unselected plugins build in normal mode and keep their current revision.
+	Selected map[string]bool
 	// Diagnostics receives build hook output; nil discards it.
 	Diagnostics io.Writer
 }

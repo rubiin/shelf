@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -165,22 +166,45 @@ func NewRoot() *cobra.Command {
 			return err
 		},
 	})
-	var updateLock bool
+	var updateLock, updateInteractive bool
 	var updateConcurrency int
 	updateCommand := &cobra.Command{
 		Use:   "update",
 		Short: "Update plugin sources",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if updateInteractive {
+				if updateLock {
+					return fmt.Errorf("--lock cannot be combined with --interactive")
+				}
+				if nonInteractive {
+					return fmt.Errorf("update --interactive cannot be used with --non-interactive")
+				}
+			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
+				if updateInteractive {
+					selection, err := selectPlugins(cmd, paths)
+					if err != nil {
+						return err
+					}
+					if selection == nil {
+						return nil
+					}
+					selected := make(map[string]bool, len(selection))
+					for _, name := range selection {
+						selected[name] = true
+					}
+					return updateSources(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), updateConcurrency, selected)
+				}
 				if updateLock {
 					return lockConfig(paths, lock.ModeUpdate, updateConcurrency, cmd.ErrOrStderr())
 				}
-				return updateSources(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), updateConcurrency)
+				return updateSources(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), updateConcurrency, nil)
 			})
 		},
 	}
 	updateCommand.Flags().BoolVar(&updateLock, "lock", false, "write the refreshed lock file without shell output")
+	updateCommand.Flags().BoolVarP(&updateInteractive, "interactive", "i", false, "select plugins to update interactively")
 	updateCommand.Flags().IntVar(&updateConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
 	updateCommand.Flags().BoolVar(&forceUpdate, "force", false, "update frozen plugins too")
 	command.AddCommand(updateCommand)
@@ -216,16 +240,22 @@ func NewRoot() *cobra.Command {
 			})
 		},
 	})
-	command.AddCommand(&cobra.Command{
+	var cleanInteractive bool
+	cleanCommand := &cobra.Command{
 		Use:   "clean",
 		Short: "Remove unconfigured installed plugins",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cleanInteractive && nonInteractive {
+				return fmt.Errorf("clean --interactive cannot be used with --non-interactive")
+			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
-				return cleanPlugins(paths, cmd.OutOrStdout())
+				return cleanPlugins(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), cleanInteractive)
 			})
 		},
-	})
+	}
+	cleanCommand.Flags().BoolVarP(&cleanInteractive, "interactive", "i", false, "select plugins to clean interactively")
+	command.AddCommand(cleanCommand)
 	command.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List installed plugins",
@@ -726,15 +756,20 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	return renderScript(output, locked, diagnostics)
 }
 
-func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int) error {
+func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int, selected map[string]bool) error {
 	inputs, err := loadSourceInputs(paths, diagnostics)
 	if err != nil {
 		return err
 	}
+	inputs.Context.Selected = selected
 	log := newLogger(diagnostics)
-	// Update skips frozen plugins unless --force; mark them Frozen.
+	// Update skips frozen plugins unless --force; mark them Frozen. An interactive
+	// update builds unselected plugins in normal mode, so only they get the status.
 	for _, name := range lock.PluginNames(inputs.Config) {
 		plugin := inputs.Config.Plugins[name]
+		if selected != nil && !selected[name] {
+			continue
+		}
 		if forceUpdate || !plugin.Frozen || plugin.Inline != "" || !lock.Active(plugin.Profiles, profile) {
 			continue
 		}
@@ -767,28 +802,40 @@ var interactiveSelect = func(options []string, out io.Writer) ([]string, error) 
 	return tui.Select(options, tui.IO{In: os.Stdin, Out: out, MakeRaw: term.MakeRaw, Restore: term.Restore, Color: colorEnabled(color, true)})
 }
 
-func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
+// selectPlugins shows the picker over the config's plugin names. It returns nil
+// without error when the user cancels, so callers skip their write.
+func selectPlugins(cmd *cobra.Command, paths Paths) ([]string, error) {
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := config.Validate(cfg); err != nil {
-		return err
+		return nil, err
 	}
 	if len(cfg.Plugins) == 0 {
-		return fmt.Errorf("no plugins configured")
+		return nil, fmt.Errorf("no plugins configured")
 	}
-	names := make([]string, 0, len(cfg.PluginOrder))
-	names = append(names, cfg.PluginOrder...)
 	out := cmd.OutOrStdout()
-	selection, err := interactiveSelect(names, out)
+	selection, err := interactiveSelect(cfg.PluginOrder, out)
 	if errors.Is(err, tui.ErrCancelled) {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), writerColors(cmd.ErrOrStderr()).dim("cancelled"))
-		return nil
+		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	return selection, nil
+}
+
+func removeInteractiveConfig(cmd *cobra.Command, paths Paths) error {
+	selection, err := selectPlugins(cmd, paths)
 	if err != nil {
 		return err
 	}
+	if selection == nil {
+		return nil
+	}
+	out := cmd.OutOrStdout()
 	for _, name := range selection {
 		if err := config.Remove(paths.ConfigFile, name); err != nil {
 			return err
@@ -1147,7 +1194,7 @@ func usesGit(cfg config.Config) bool {
 	return false
 }
 
-func cleanPlugins(paths Paths, output io.Writer) error {
+func cleanPlugins(paths Paths, output, diagnostics io.Writer, interactive bool) error {
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
 		return err
@@ -1155,7 +1202,34 @@ func cleanPlugins(paths Paths, output io.Writer) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	removed, err := cleanInstallDirectories(paths.DataDirectory, cfg)
+	unowned, err := findUnownedPaths(paths.DataDirectory, cfg)
+	if err != nil {
+		return err
+	}
+	if interactive {
+		if len(unowned) == 0 {
+			_, err := fmt.Fprintf(output, "%s nothing to clean\n", writerColors(output).success(successMark))
+			return err
+		}
+		display := make([]string, len(unowned))
+		for index, path := range unowned {
+			display[index] = installDisplayPath(paths.DataDirectory, path)
+		}
+		selection, err := interactiveSelect(display, output)
+		if errors.Is(err, tui.ErrCancelled) {
+			_, _ = fmt.Fprintln(diagnostics, writerColors(diagnostics).dim("cancelled"))
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if len(selection) == 0 {
+			_, err := fmt.Fprintf(output, "%s nothing to clean\n", writerColors(output).success(successMark))
+			return err
+		}
+		unowned = selection
+	}
+	removed, err := removePaths(unowned)
 	if err != nil {
 		return err
 	}
@@ -1173,6 +1247,21 @@ func cleanPlugins(paths Paths, output io.Writer) error {
 	return err
 }
 
+// removePaths deletes paths, longest first so children go before their parents.
+func removePaths(paths []string) ([]string, error) {
+	ordered := make([]string, len(paths))
+	copy(ordered, paths)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[j] < ordered[i] })
+	var removed []string
+	for _, path := range ordered {
+		if err := os.RemoveAll(path); err != nil {
+			return removed, err
+		}
+		removed = append(removed, path)
+	}
+	return removed, nil
+}
+
 // cleanUnownedSources prunes installed sources the config no longer owns.
 func cleanUnownedSources(dataDirectory string, cfg config.Config, log logger) error {
 	removed, err := cleanInstallDirectories(dataDirectory, cfg)
@@ -1186,6 +1275,15 @@ func cleanUnownedSources(dataDirectory string, cfg config.Config, log logger) er
 }
 
 func cleanInstallDirectories(dataDirectory string, cfg config.Config) ([]string, error) {
+	unowned, err := findUnownedPaths(dataDirectory, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return removePaths(unowned)
+}
+
+// findUnownedPaths lists what cleanInstallDirectories would delete, without deleting.
+func findUnownedPaths(dataDirectory string, cfg config.Config) ([]string, error) {
 	kept, sources, err := ownedInstallPaths(dataDirectory, cfg)
 	if err != nil {
 		return nil, err
@@ -1242,7 +1340,8 @@ func keepAncestors(kept map[string]bool, path string) {
 	}
 }
 
-// removeUnownedPaths deletes anything under root the config does not own.
+// removeUnownedPaths walks root deleting anything the config does not own; it
+// is the destructive half of findUnownedPaths.
 func removeUnownedPaths(root string, kept, sources map[string]bool) ([]string, error) {
 	var removed []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {

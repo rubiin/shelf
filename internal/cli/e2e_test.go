@@ -1632,6 +1632,219 @@ func TestRemoveInteractiveCancelledKeepsConfig(t *testing.T) {
 	}
 }
 
+func TestUpdateInteractiveUpdatesOnlySelected(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repo")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := gitCommit(t, repository, "plugin.zsh", "echo one\n")
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\ngit = \"" + repository + "\"\n\n[plugins.other]\ninline = \"echo other\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	second := gitCommit(t, repository, "plugin.zsh", "echo two\n")
+
+	original := interactiveSelect
+	interactiveSelect = func(options []string, _ io.Writer) ([]string, error) {
+		if len(options) != 2 || options[0] != "demo" || options[1] != "other" {
+			t.Errorf("picker options = %v, want demo, other", options)
+		}
+		return []string{"demo"}, nil
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"update", "-i"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := lock.Read(filepath.Join(directory, "data", "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 2 {
+		t.Fatalf("locked plugins = %d, want 2 (unselected plugins stay locked)", len(locked.Plugins))
+	}
+	for _, plugin := range locked.Plugins {
+		want := first
+		if plugin.Name == "demo" {
+			want = second
+		}
+		if plugin.Rev != want {
+			t.Fatalf("plugin %q revision = %q, want %q", plugin.Name, plugin.Rev, want)
+		}
+	}
+}
+
+func TestUpdateInteractiveCancelledStaysPinned(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repo")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rev := gitCommit(t, repository, "plugin.zsh", "echo one\n")
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\ngit = \"" + repository + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	gitCommit(t, repository, "plugin.zsh", "echo two\n")
+
+	originalSelect := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		return nil, tui.ErrCancelled
+	}
+	t.Cleanup(func() { interactiveSelect = originalSelect })
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"update", "--interactive"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("cancel should not be an error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "cancelled") {
+		t.Fatalf("stderr = %q, want cancelled message", stderr.String())
+	}
+	locked, err := lock.Read(filepath.Join(directory, "data", "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || locked.Plugins[0].Rev != rev {
+		t.Fatalf("locked plugins = %+v, want the original revision %q preserved", locked.Plugins, rev)
+	}
+}
+
+func TestUpdateInteractiveRejectsLockFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"update", "--interactive", "--lock"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error when --lock is combined with --interactive")
+	}
+	if !strings.Contains(err.Error(), "--lock cannot be combined with --interactive") {
+		t.Fatalf("error = %v, want the --lock conflict error", err)
+	}
+}
+
+func TestCleanInteractiveRemovesOnlySelected(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.current]\ninline = \"echo current\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"obsolete", "stale"} {
+		if err := os.MkdirAll(filepath.Join(dataDir, "plugins", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	original := interactiveSelect
+	interactiveSelect = func(options []string, _ io.Writer) ([]string, error) {
+		if len(options) != 2 || options[0] != "plugins/obsolete" || options[1] != "plugins/stale" {
+			t.Errorf("picker options = %v, want plugins/obsolete, plugins/stale", options)
+		}
+		return []string{"plugins/stale"}, nil
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"clean", "-i"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "removed: plugins/stale\n✓ cleaned: 1 paths\n" {
+		t.Fatalf("clean output = %q", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "plugins", "stale")); !os.IsNotExist(err) {
+		t.Fatalf("selected directory remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "plugins", "obsolete")); err != nil {
+		t.Fatalf("unselected directory was removed: %v", err)
+	}
+}
+
+func TestCleanInteractiveCancelledRemovesNothing(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.current]\ninline = \"echo current\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dataDir, "plugins", "obsolete")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	originalSelect := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		return nil, tui.ErrCancelled
+	}
+	t.Cleanup(func() { interactiveSelect = originalSelect })
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"clean", "--interactive"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("cancel should not be an error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "cancelled") {
+		t.Fatalf("stderr = %q, want cancelled message", stderr.String())
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("canceled clean removed %q: %v", stale, err)
+	}
+}
+
+func TestCleanInteractiveNothingToClean(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"plugins/demo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	original := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		t.Fatal("picker shown with nothing to clean")
+		return nil, nil
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var output bytes.Buffer
+	if err := Execute([]string{"clean", "--interactive"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "✓ nothing to clean\n" {
+		t.Fatalf("clean output = %q", output.String())
+	}
+}
+
 func TestRemoveInteractiveRejectsNameArgument(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := Execute([]string{"remove", "--interactive", "alpha"}, &stdout, &stderr); err == nil {

@@ -141,7 +141,9 @@ func buildPlugin(installContext context.Context, ctx Context, cfg config.Config,
 		return LockedPlugin{Name: name, Inline: plugin.Inline, Hooks: plugin.Hooks}, nil
 	}
 	// Frozen plugins keep their pin on update; --force and --reinstall still refresh.
-	update := mode == ModeUpdate && (!plugin.Frozen || ctx.Force)
+	// Selected (interactive update) restricts the refresh to the named plugins;
+	// the rest build in normal mode and keep their current revision.
+	update := mode == ModeUpdate && (ctx.Selected == nil || ctx.Selected[name]) && (!plugin.Frozen || ctx.Force)
 	installed, err := installer.Install(installContext, source.Request{
 		Name: name, Git: plugin.Git, GitHub: plugin.GitHub, Gist: plugin.Gist, GitLab: plugin.GitLab, Bitbucket: plugin.Bitbucket, Codeberg: plugin.Codeberg, Proto: plugin.Proto, Remote: plugin.Remote,
 		Local: plugin.Local, Optional: plugin.Optional, Ref: plugin.Rev, Branch: plugin.Branch,
