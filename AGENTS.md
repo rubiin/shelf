@@ -2,8 +2,7 @@
 
 ## Project
 
-Shelf is a Go shell plugin manager modeled on [Sheldon](https://github.com/rossmacarthur/sheldon), Zinit and ZPlug.
-
+Shelf is a Go shell plugin manager modeled on [Sheldon](https://github.com/rossmacarthur/sheldon), Zinit, and Zplug.
 
 | Concept | Value |
 |---|---|
@@ -34,6 +33,7 @@ gofmt -w $(find . -name '*.go' -type f)
 go vet ./...
 go build ./cmd/shelf
 go test ./...
+golangci-lint run ./...
 ```
 
 Run focused tests with:
@@ -46,48 +46,80 @@ go test ./internal/lock -run TestName
 go test ./internal/render -run TestName
 ```
 
-If `golangci-lint` is configured for this repo, run it before submitting changes:
+## Definition of done
 
-```sh
-golangci-lint run ./...
-```
+A change is not complete until all of the following hold:
+
+1. `gofmt` produces no output (all files formatted).
+2. `go vet ./...`, `go build ./cmd/shelf`, and `go test ./...` pass with no failures.
+3. `golangci-lint run ./...` reports zero issues.
+4. New or changed behavior has test coverage; Sheldon-compatibility changes have explicit tests.
+5. The diff contains only the requested change. No unrelated edits, reformatting, or files.
+6. No signature, footer, or attribution is appended to the commit (see Commit standards).
 
 ## Code rules
 
 **Architecture**
 
-* Keep Cobra parsing and flag/env/path resolution in `internal/cli`; delegate config, source, lock, and rendering behavior to their respective packages. `internal/cli` should orchestrate, not implement.
-* Prefer the Go standard library over third-party dependencies where practical. Justify any new dependency in the PR description.
+- Keep Cobra parsing and flag/env/path resolution in `internal/cli`; delegate config, source, lock, and rendering behavior to their respective packages. `internal/cli` orchestrates, it does not implement.
+- Prefer the Go standard library over third-party dependencies. Any new dependency must be justified in the PR description.
+- Keep packages decoupled: communicate through exported functions and types, not shared globals or package-state imports.
 
 **Compatibility and I/O**
 
-* Keep `source` shell code on stdout only. Send all status, progress, and diagnostic output to stderr.
-* Keep Bash and Zsh behavior explicit, tested, and reviewed together — a change to one shell's output should be checked against the other.
-* Do not change `SHELF_*` env var names or shelf's default directories without updating tests and the README in the same change.
+- Keep `source` shell code on stdout only. Send all status, progress, and diagnostic output to stderr.
+- Keep Bash and Zsh behavior explicit, tested, and reviewed together: a change to one shell's output must be checked against the other.
+- Do not change `SHELF_*` env var names or shelf's default directories without updating tests and the README in the same change.
 
 **Config and filesystem safety**
 
-* Keep config edits minimally destructive: preserve comments, formatting, and unrelated TOML when adding, removing, or updating plugins.
-* Use temporary files plus atomic renames (`os.Rename` within the same filesystem) for any downloaded or generated content — never write final output files in place.
-* Use argument arrays with `os/exec` (e.g. `exec.Command(name, args...)`); never build shell commands through string concatenation or interpolation.
+- Keep config edits minimally destructive: preserve comments, formatting, and unrelated TOML when adding, removing, or updating plugins.
+- Use temporary files plus atomic renames (`os.Rename` within the same filesystem) for any downloaded or generated content. Never write final output files in place.
+- Use argument arrays with `os/exec` (for example `exec.Command(name, args...)`). Never build shell commands through string concatenation or interpolation.
 
 **Errors and concurrency**
 
-* Wrap errors with `fmt.Errorf("...: %w", err)` to preserve the chain; avoid swallowing or discarding errors silently.
-* Prefer `context.Context` for cancellation and timeouts on network and subprocess calls (git clones, HTTP fetches); thread it through rather than reaching for globals.
+- Wrap errors with `fmt.Errorf("...: %w", err)` to preserve the chain. Never swallow or discard errors silently.
+- Prefer `context.Context` for cancellation and timeouts on network and subprocess calls (git clones, HTTP fetches). Thread it through rather than reaching for globals.
 
 **Testing**
 
-* Write tests after adding new production behavior, and always when adding or changing Sheldon-compatibility behavior (command names, TOML shape, lock format, rendered output).
-* Prefer table-driven tests and golden-file comparisons for renderer and lock output, consistent with existing tests in each package.
+- Write tests after adding new production behavior, and always when adding or changing Sheldon-compatibility behavior (command names, TOML shape, lock format, rendered output).
+- Prefer table-driven tests and golden-file comparisons for renderer and lock output, consistent with existing tests in each package.
+- Add a regression test for every bug fix before considering the fix done.
+
+## Best practices
+
+**Code review**
+
+- Re-read your own diff before finishing. Remove debug output, dead code, and speculative abstractions.
+- Keep diffs small and single-purpose. If a change mixes concerns, split it.
+- Prefer boring, explicit code over cleverness. Optimize only when a benchmark or profile shows a problem.
+
+**Maintenance**
+
+- Review and refactor code regularly to maintain clarity, simplicity, and adherence to established patterns.
+- Keep comments concise and valuable: state why, not what. Run the `unslop` skill when writing or rewriting comments.
+- Run the `brainstorming` skill to generate and evaluate ideas before implementing them in code.
+- Use sub-agent-driven development whenever working on multiple independent tasks.
+
+**Communication**
+
+- Be direct and professional. Do not add pleasantries, filler, or sign-offs to the end of responses.
+- Never append footers, signatures, or AI attribution to any text you produce (see Commit standards below for commits).
+
+## Commit standards
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`. Use `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
+- Write the subject in the imperative, under 72 characters, with no trailing period. Explain body details as what and why, not how.
+- Do not commit unless explicitly requested.
+- Keep each commit and PR scoped to a single logical change; call out any Sheldon-compatibility implication explicitly in the description.
+- Never append a footer to a commit message:
+  - No `Co-Authored-By`, no `Signed-off-by` unless requested, no "Generated with", no AI tool or model names, no attribution lines of any kind.
+- The same rule applies to all generated text: PR descriptions, issue reports, docs, and replies must not carry footers, signatures, or AI attribution.
 
 ## Workflow
 
-* Run `gofmt`, `go vet`, `go build`, and `go test ./...` and lint before considering a change complete.
-* Do not commit changes unless explicitly requested.
-* Keep commits and PRs scoped to a single logical change; call out any Sheldon-compatibility implication explicitly in the description.
-* Use unslop skill to write comments clearly and concisely, avoiding unnecessary verbosity and ensuring they add value to the code. Same
-  applies for generated commit
-* Use brainstroming skill to generate and evaluate ideas effectively before implementing them in code.
-* Review and refactor code regularly to maintain clarity, simplicity, and adherence to established patterns and best practices.
-* Try to use sub-agent driven development whenever possible
+- Run the checks in Definition of done and confirm their output before claiming any change is complete.
+- Do not commit changes unless explicitly requested.
+- Call out any Sheldon-compatibility implication explicitly in the PR description.
