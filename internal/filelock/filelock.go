@@ -35,17 +35,32 @@ func AcquireContext(ctx context.Context, directory string, exclusive bool, warni
 	return acquire(directory, exclusive, warnings, ctx)
 }
 
-func acquire(directory string, exclusive bool, warnings io.Writer, ctx context.Context) (*Guard, error) {
+// openDirectory opens and stats the lock directory. A var so tests can inject
+// open or stat failures at the boundary.
+var openDirectory = func(directory string) (*os.File, os.FileInfo, error) {
 	file, err := os.Open(directory)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
+		return nil, nil, err
 	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
+		return nil, nil, err
+	}
+	return file, info, nil
+}
+
+// flock wraps syscall.Flock so tests can inject syscall failures.
+var flock = func(fd uintptr, how int) error {
+	return syscall.Flock(int(fd), how)
+}
+
+func acquire(directory string, exclusive bool, warnings io.Writer, ctx context.Context) (*Guard, error) {
+	file, info, err := openDirectory(directory)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if !info.IsDir() {
@@ -65,7 +80,7 @@ func acquire(directory string, exclusive bool, warnings io.Writer, ctx context.C
 		default:
 		}
 	}
-	if err := syscall.Flock(int(file.Fd()), operation|syscall.LOCK_NB); err != nil {
+	if err := flock(file.Fd(), operation|syscall.LOCK_NB); err != nil {
 		// EAGAIN/EWOULDBLOCK mean the lock is held, EINTR means interrupted; retry.
 		if !isRetryable(err) {
 			_ = file.Close()
@@ -85,7 +100,7 @@ func acquire(directory string, exclusive bool, warnings io.Writer, ctx context.C
 // waitBlocking retries the flock until granted; EINTR restarts the wait.
 func waitBlocking(file *os.File, operation int) (*Guard, error) {
 	for {
-		if err := syscall.Flock(int(file.Fd()), operation); err == nil {
+		if err := flock(file.Fd(), operation); err == nil {
 			return &Guard{file: file}, nil
 		} else if !errors.Is(err, syscall.EINTR) {
 			_ = file.Close()
@@ -100,7 +115,7 @@ func waitContext(ctx context.Context, file *os.File, operation int, directory st
 	ticker := time.NewTicker(lockRetryInterval)
 	defer ticker.Stop()
 	for {
-		if err := syscall.Flock(int(file.Fd()), operation|syscall.LOCK_NB); err == nil {
+		if err := flock(file.Fd(), operation|syscall.LOCK_NB); err == nil {
 			return &Guard{file: file}, nil
 		} else if !isRetryable(err) {
 			_ = file.Close()

@@ -11,8 +11,12 @@ import (
 // version is stamped by release builds with -X main.version.
 var version = "dev"
 
+// osExit redirects process exit so a test can invoke main without terminating
+// the test process; production behavior is unchanged.
+var osExit = os.Exit
+
 func main() {
-	os.Exit(exitCode(run()))
+	osExit(exitCode(run()))
 }
 
 // run executes the CLI; cli.Execute has already printed any error.

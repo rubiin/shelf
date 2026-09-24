@@ -1,15 +1,20 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"shelf/internal/config"
+	"shelf/internal/lock"
 	"shelf/internal/selfupdate"
 )
 
@@ -315,5 +320,341 @@ func TestUsesGitCoversEveryForge(t *testing.T) {
 	}
 	if usesGit(config.Config{Plugins: map[string]config.RawPlugin{"local": {Local: "/tmp"}}}) {
 		t.Error("usesGit reported git for a local-only config")
+	}
+}
+
+// withCleanProfile pins the package-level profile so direct calls to profile-aware
+// helpers are deterministic regardless of what earlier cobra executions left behind.
+func withCleanProfile(t *testing.T) {
+	t.Helper()
+	original := profile
+	profile = ""
+	t.Cleanup(func() { profile = original })
+}
+
+func TestRuntimeContextResolvesSettings(t *testing.T) {
+	directory := t.TempDir()
+	wantConfigDir := filepath.Join(directory, "config")
+	wantConfigFile := filepath.Join(wantConfigDir, "config.toml")
+	wantDataDir := filepath.Join(directory, "data")
+
+	originalProfile, originalColor := profile, color
+	originalQuiet, originalNonInteractive, originalVerbose := quiet, nonInteractive, verbose
+	originalConfigDir, originalDataDir, originalConfigFile := configDir, dataDir, configFile
+	t.Cleanup(func() {
+		profile, color = originalProfile, originalColor
+		quiet, nonInteractive, verbose = originalQuiet, originalNonInteractive, originalVerbose
+		configDir, dataDir, configFile = originalConfigDir, originalDataDir, originalConfigFile
+	})
+	profile, color = "work", "always"
+	quiet, nonInteractive, verbose = true, true, true
+	configDir, dataDir, configFile = wantConfigDir, wantDataDir, wantConfigFile
+
+	context := RuntimeContext()
+	if context.Profile != "work" || context.Color != "always" {
+		t.Fatalf("context settings = %+v", context)
+	}
+	if context.ConfigFile != wantConfigFile || context.ConfigDirectory != wantConfigDir {
+		t.Fatalf("context paths = config %q dir %q, want %q / %q", context.ConfigFile, context.ConfigDirectory, wantConfigFile, wantConfigDir)
+	}
+	if context.DataDirectory != wantDataDir {
+		t.Fatalf("context data directory = %q, want %q", context.DataDirectory, wantDataDir)
+	}
+
+	// An unresolvable home leaves every path field empty instead of panicking.
+	t.Setenv("HOME", "")
+	context = RuntimeContext()
+	if context.ConfigFile != "" || context.ConfigDirectory != "" || context.DataDirectory != "" {
+		t.Fatalf("unresolvable home left path fields populated: %+v", context)
+	}
+}
+
+func TestHomeDirUsesHOMEThenUserHomeFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got := homeDir(); got != home {
+		t.Fatalf("homeDir = %q, want the HOME value %q", got, home)
+	}
+
+	// With HOME unset the os.UserHomeDir fallback runs without crashing; its
+	// value is environment-dependent, so only that the branch re-ran is asserted.
+	t.Setenv("HOME", "")
+	if got := homeDir(); got == home {
+		t.Fatalf("homeDir returned the prior HOME %q with HOME unset", got)
+	}
+}
+
+func TestConfigShellAcceptsExplicitZsh(t *testing.T) {
+	t.Setenv("SHELF_SHELL", "zsh")
+	if shell, err := configShell(); err != nil || shell != config.Zsh {
+		t.Fatalf("shell = %q, err = %v, want explicit zsh", shell, err)
+	}
+}
+
+func TestUnlockedLockRejectsUnreadablePaths(t *testing.T) {
+	withCleanProfile(t)
+	t.Setenv("SHELF_SHELL", "")
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	lockPath := filepath.Join(dataDir, "plugins.lock")
+	paths := Paths{ConfigDirectory: configDir, DataDirectory: dataDir, ConfigFile: configFile}
+
+	// An unreadable config must take the slow path, never render a stale lock.
+	if _, valid := unlockedLock(paths, lockPath); valid {
+		t.Fatal("unlockedLock accepted a missing config")
+	}
+	contents := []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n")
+	if err := os.WriteFile(configFile, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A missing lock file is equally invalid.
+	if _, valid := unlockedLock(paths, lockPath); valid {
+		t.Fatal("unlockedLock accepted a missing lock file")
+	}
+	// A healthy config and lock verify, so only the manifest error stays.
+	fingerprint, err := fingerprintWithRevision(fingerprintWithShell(contents), paths.RevisionLockFile(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := lock.LockedConfig{ConfigFingerprint: fingerprint, Shell: "zsh", Templates: map[string]string{"source": "source \"{{ file }}\""}, Plugins: []lock.LockedPlugin{{Name: "test", Inline: "echo testing"}}}
+	if err := lock.Write(lockPath, locked); err != nil {
+		t.Fatal(err)
+	}
+	if _, valid := unlockedLock(paths, lockPath); !valid {
+		t.Fatal("unlockedLock rejected a matching config and lock")
+	}
+	// An unreadable revision manifest invalidates the fast path instead of silently dropping pins.
+	if err := os.MkdirAll(paths.RevisionLockFile(""), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, valid := unlockedLock(paths, lockPath); valid {
+		t.Fatal("unlockedLock ignored an unreadable revision manifest")
+	}
+}
+
+func TestPluginSourceRendersEveryKind(t *testing.T) {
+	tests := []struct {
+		name   string
+		plugin config.RawPlugin
+		want   string
+	}{
+		{"github", config.RawPlugin{GitHub: "owner/repo"}, "https://github.com/owner/repo"},
+		{"git", config.RawPlugin{Git: "https://example.com/repo.git"}, "https://example.com/repo.git"},
+		{"gist", config.RawPlugin{Gist: "deadbeef"}, "https://gist.github.com/deadbeef"},
+		{"remote", config.RawPlugin{Remote: "https://example.com/plugin.zsh"}, "https://example.com/plugin.zsh"},
+		{"local", config.RawPlugin{Local: "/tmp/plugin"}, "/tmp/plugin"},
+		{"inline", config.RawPlugin{Inline: "echo hi"}, "inline"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pluginSource(test.plugin); got != test.want {
+				t.Fatalf("pluginSource(%+v) = %q, want %q", test.plugin, got, test.want)
+			}
+		})
+	}
+}
+
+func TestDisplayPathShortensHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	inside := filepath.Join(home, "config", "config.toml")
+	want := "~" + string(filepath.Separator) + "config" + string(filepath.Separator) + "config.toml"
+	if got := displayPath(inside); got != want {
+		t.Fatalf("displayPath inside home = %q, want %q", got, want)
+	}
+	outside := filepath.Join(t.TempDir(), "shared", "config.toml")
+	if got := displayPath(outside); got != outside {
+		t.Fatalf("displayPath outside home = %q, want the path unchanged", got)
+	}
+}
+
+func TestEditConfigRejectsMissingEditor(t *testing.T) {
+	t.Setenv("SHELF_EDITOR", "")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+	if err := editConfig(Paths{}); err == nil || !strings.Contains(err.Error(), "no editor") {
+		t.Fatalf("editConfig err = %v, want a no-editor error", err)
+	}
+}
+
+func TestEditConfigRejectsAllBlankEditors(t *testing.T) {
+	for name, value := range map[string]string{
+		"SHELF_EDITOR": "   ",
+		"VISUAL":       "   ",
+		"EDITOR":       "   ",
+	} {
+		t.Setenv("SHELF_EDITOR", "")
+		t.Setenv("VISUAL", "")
+		t.Setenv("EDITOR", "")
+		t.Setenv(name, value)
+		if err := editConfig(Paths{}); err == nil || !strings.Contains(err.Error(), "no editor") {
+			t.Fatalf("%s=%q err = %v, want a no-editor error", name, value, err)
+		}
+	}
+}
+
+func TestEditConfigRejectsUnbalancedEditorQuotes(t *testing.T) {
+	t.Setenv("SHELF_EDITOR", "'/opt/my editor")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+	if err := editConfig(Paths{}); err == nil || !strings.Contains(err.Error(), "unbalanced quotes") {
+		t.Fatalf("editConfig err = %v, want an unbalanced-quotes error", err)
+	}
+}
+
+func TestListPluginsReportsLoadErrors(t *testing.T) {
+	if err := listPlugins(Paths{ConfigFile: filepath.Join(t.TempDir(), "missing.toml")}, io.Discard); err == nil {
+		t.Fatal("listPlugins accepted a missing config")
+	}
+}
+
+func TestListPluginsSurfacesWriteErrors(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.a]\ninline = \"echo a\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := listPlugins(Paths{ConfigFile: configFile}, errWriter{}); err == nil {
+		t.Fatal("listPlugins swallowed a write error")
+	}
+}
+
+func TestPrintPathsSurfacesWriteErrors(t *testing.T) {
+	paths := Paths{ConfigDirectory: "/c", DataDirectory: "/d", ConfigFile: "/c/config.toml"}
+	if err := printPaths(paths, errWriter{}); err == nil {
+		t.Fatal("printPaths swallowed a write error")
+	}
+}
+
+func TestPluginInfoRejectsMissingLockFile(t *testing.T) {
+	withCleanProfile(t)
+	directory := t.TempDir()
+	paths := Paths{DataDirectory: directory, ConfigFile: filepath.Join(directory, "config.toml")}
+	if err := pluginInfo(paths, "demo", io.Discard); err == nil {
+		t.Fatal("pluginInfo accepted a missing lock file")
+	}
+}
+
+func TestPluginInfoRejectsUnmeasurablePluginSize(t *testing.T) {
+	withCleanProfile(t)
+	directory := t.TempDir()
+	lockPath := filepath.Join(directory, "plugins.lock")
+	locked := lock.LockedConfig{Shell: "zsh", Plugins: []lock.LockedPlugin{{Name: "demo", Directory: filepath.Join(directory, "gone")}}}
+	if err := lock.Write(lockPath, locked); err != nil {
+		t.Fatal(err)
+	}
+	paths := Paths{DataDirectory: directory, ConfigFile: filepath.Join(directory, "config.toml")}
+	if err := pluginInfo(paths, "demo", io.Discard); err == nil || !strings.Contains(err.Error(), "size") {
+		t.Fatalf("pluginInfo err = %v, want a size error for a vanished directory", err)
+	}
+}
+
+func TestLoadSourceInputsErrorPaths(t *testing.T) {
+	withCleanProfile(t)
+	t.Setenv("SHELF_SHELL", "")
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	paths := Paths{ConfigDirectory: configDir, DataDirectory: dataDir, ConfigFile: configFile}
+	valid := "shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"
+
+	if _, err := loadSourceInputs(paths, io.Discard); err == nil {
+		t.Fatal("loadSourceInputs accepted a missing config")
+	}
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSourceInputs(paths, io.Discard); err == nil {
+		t.Fatal("loadSourceInputs accepted a sourceless plugin")
+	}
+	if err := os.WriteFile(configFile, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.RevisionLockFile(""), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSourceInputs(paths, io.Discard); err == nil {
+		t.Fatal("loadSourceInputs ignored an unreadable revision manifest")
+	}
+	if err := os.Remove(paths.RevisionLockFile("")); err != nil {
+		t.Fatal(err)
+	}
+	// A config without a shell falls through to SHELF_SHELL, which must be
+	// a supported shell.
+	if err := os.WriteFile(configFile, []byte("[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_SHELL", "fish")
+	if _, err := loadSourceInputs(paths, io.Discard); err == nil {
+		t.Fatal("loadSourceInputs accepted an unsupported shell")
+	}
+}
+
+func TestApplyRevisionManifestRejectsUnreadableManifest(t *testing.T) {
+	withCleanProfile(t)
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, "plugins.lock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	paths := Paths{ConfigDirectory: directory}
+	if _, err := applyRevisionManifest(paths, config.Config{}, lock.ModeNormal); err == nil {
+		t.Fatal("applyRevisionManifest ignored an unreadable manifest")
+	}
+}
+
+func TestApplyRevisionManifestSkipsMissingManifest(t *testing.T) {
+	withCleanProfile(t)
+	paths := Paths{ConfigDirectory: t.TempDir()}
+	cfg := config.Config{Shell: config.Bash}
+	got, err := applyRevisionManifest(paths, cfg, lock.ModeNormal)
+	if err != nil || got.Shell != cfg.Shell {
+		t.Fatalf("applyRevisionManifest = %+v, %v; want the config unchanged", got, err)
+	}
+}
+
+func TestInitConfigRejectsUnstatableConfigPath(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := &cobra.Command{}
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	paths := Paths{ConfigDirectory: t.TempDir(), DataDirectory: filepath.Join(t.TempDir(), "data"), ConfigFile: filepath.Join(blocker, "config.toml")}
+	if err := initConfig(command, paths, ""); err == nil {
+		t.Fatal("initConfig accepted a config path under a file")
+	}
+}
+
+func TestInitShellPromptAcceptsAChoice(t *testing.T) {
+	var out bytes.Buffer
+	in := bufio.NewReader(strings.NewReader("bash\n"))
+	shell, err := initShellPrompt(in, &out)
+	if err != nil || shell != config.Bash {
+		t.Fatalf("shell = %q, err = %v, want bash", shell, err)
+	}
+}
+
+func TestInitConfirmPromptAcceptsYes(t *testing.T) {
+	var out bytes.Buffer
+	in := bufio.NewReader(strings.NewReader("y\n"))
+	ok, err := initConfirmPrompt("/tmp/config.toml", in, &out)
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v, want true", ok, err)
 	}
 }

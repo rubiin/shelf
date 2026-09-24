@@ -422,10 +422,14 @@ func checkWritable(target string) error {
 	return nil
 }
 
+// createTemp opens the staging file for an install. A var so tests can inject
+// file-system failures.
+var createTemp = os.CreateTemp
+
 // installBinary writes a temp file, fsyncs it, and renames it over target, so
 // a crash leaves the old binary intact and never a zero-length one.
 func installBinary(target string, contents []byte) error {
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".shelf-update-*")
+	temporary, err := createTemp(filepath.Dir(target), ".shelf-update-*")
 	if err != nil {
 		return err
 	}

@@ -170,7 +170,7 @@ modules.xml
 *.ipr
 
 # End of https://www.toptal.com/developers/gitignore (created with ignit)
-shelf
+/shelf
 ignore_me
 docs/superpowers
 perf.md

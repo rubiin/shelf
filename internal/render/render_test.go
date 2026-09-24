@@ -861,6 +861,12 @@ func TestExpressionPlansMatchTheFullEvaluator(t *testing.T) {
 		"name", "dir", "file", "files", "files.0", "files.1", "files.2", "hooks", "hooks?.pre", "hooks?.missing", "hooks.pre",
 		"name | nl", "hooks?.pre | nl", "files.0 | nl", "file | dquote", "missing | nl", "unknown.thing | nl", "not name", "?.name",
 		"missing", "missing.member", "true", "false", "42", "\"literal\"", "get(hooks, \"pre\")", "name.member", "files.0.member",
+		// Optional-name and optional-member shapes, empty segments, calls with
+		// quoted and nested arguments, and names that exercise identifier
+		// digit handling: the planner must fall back exactly where the generic
+		// evaluator does.
+		"?.missing", "?.missing.thing", "files.", ".", "a b(x)", "file1",
+		`get(hooks, "a\"b")`, `get(get(hooks, "pre"), "pre")`, "(name)", "(missing)", "not missing",
 	} {
 		planned, plannedErr := planExpression(expression).evaluate(expression, current)
 		generic, genericErr := evalExpression(expression, current)

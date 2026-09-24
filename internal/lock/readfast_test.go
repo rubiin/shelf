@@ -305,3 +305,105 @@ func FuzzReadLockMatchesTomlDecoder(f *testing.F) {
 		}
 	})
 }
+
+// The fast reader must accept everything Write emits plus a few shapes Write omits
+// (empty lists, an explicit false, signed depths, and CRLF newlines from other
+// editors); each must agree with the general decoder.
+func TestFastReadHandlesWriterEdgeCases(t *testing.T) {
+	cases := map[string]string{
+		"empty file list":                                "shell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\nfiles = []\n",
+		"explicit false frozen":                          "shell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\nfrozen = false\n",
+		"negative depth":                                 "shell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\ndepth = -1\n",
+		"positive depth":                                 "shell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\ndepth = +1\n",
+		"unmatched profile badge":                        "config_fingerprint = \"abc\"\nprofile = \"work\"\nprofile_match = \"unmatched\"\nshell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\n",
+		"escaped backspace formfeed and carriage return": "shell = \"zsh\"\n\n[[plugins]]\nname = \"one\"\ninline = \"a\\bb\\fc\\rd\"\n",
+		"leading crlf newline":                           "\r\nshell = \"zsh\"\n",
+	}
+	for name, contents := range cases {
+		t.Run(name, func(t *testing.T) {
+			fast, ok := parseLockFast([]byte(contents))
+			if !ok {
+				t.Fatalf("parseLockFast gave up on:\n%s", contents)
+			}
+			if slow := decodeSlow(t, []byte(contents)); !reflect.DeepEqual(fast, slow) {
+				t.Fatalf("fast reader diverged:\nfast: %#v\nslow: %#v", fast, slow)
+			}
+		})
+	}
+}
+
+// The fast reader bails on anything outside Write's schema rather than misreading
+// it. Some of these are valid TOML and fall back cleanly; the rest must fail with
+// the same error the general decoder produces.
+func TestFastReadBailsOnSchemaViolations(t *testing.T) {
+	plugin := "\n[[plugins]]\nname = \"one\"\n"
+	cases := map[string][]byte{
+		"lone carriage return":              []byte("config_fingerprint = \"abc\"\rshell = \"zsh\"\n"),
+		"junk after header":                 []byte("[foo]x"),
+		"array of tables missing a bracket": []byte("[[foo]"),
+		"whitespace in table name":          []byte("[foo bar]"),
+		"lone carriage return after header": []byte("[foo]\r"),
+		"unknown array of tables":           []byte("[[other]]\nkey = \"value\"\n"),
+		"repeated env table":                []byte("[env]\nA = \"1\"\n[env]\nB = \"2\"\n"),
+		"hooks before a plugin":             []byte("[plugins.hooks]\npre = \"x\"\n"),
+		"repeated hooks table":              []byte("[[plugins]]\nname = \"a\"\n[plugins.hooks]\npre = \"x\"\n[plugins.hooks]\npost = \"y\"\n"),
+		"repeated templates table":          []byte("[templates]\nsource = \"x\"\n[templates]\npath = \"y\"\n"),
+		"dotted env key":                    []byte("[env]\nfoo.bar = \"x\"\n"),
+		"repeated env key":                  []byte("[env]\nA = \"1\"\nA = \"2\"\n"),
+		"repeated hooks key":                []byte("[[plugins]]\nname = \"a\"\n[plugins.hooks]\npre = \"x\"\npre = \"y\"\n"),
+		"dotted templates key":              []byte("[templates]\nfoo.bar = \"x\"\n"),
+		"repeated templates key":            []byte("[templates]\nsource = \"x\"\nsource = \"y\"\n"),
+		"list outside a plugin":             []byte("files = [\"a\"]\n"),
+		"list for a text only field":        []byte("[env]\nfiles = [\"a\"]\n"),
+		"text field assigned a list":        []byte(plugin + "name = [\"a\"]\n"),
+		"bool outside a plugin":             []byte("frozen = true\n"),
+		"bool value not a boolean":          []byte(plugin + "frozen = tilde\n"),
+		"depth with a leading zero":         []byte(plugin + "depth = 01\n"),
+		"depth sign without digits":         []byte(plugin + "depth = +\n"),
+		"depth too large":                   []byte(plugin + "depth = 99999999999999999999999999\n"),
+		"unterminated array":                []byte(plugin + "files = ["),
+		"comment inside array":              []byte(plugin + "files = [ # a comment\n \"a\" ]\n"),
+		"array items without comma":         []byte(plugin + "files = [\"a\" \"b\"]\n"),
+		"array closing at end":              []byte(plugin + "files = [\"a\"\n"),
+		"unterminated string":               []byte("shell = \"abc"),
+		"raw control character":             []byte("shell = \"a\x01b\"\n"),
+		"escape the writer never emits":     []byte("shell = \"a\\qb\"\n"),
+		"truncated unicode escape":          []byte("shell = \"a\\u12"),
+		"non hex unicode escape":            []byte("shell = \"a\\uZZZZ\"\n"),
+		"trailing junk after value":         []byte("shell = \"zsh\" junk\n"),
+		"junk after assignment key":         []byte("shell\n"),
+		"dotted key ends abruptly":          []byte("foo.\r"),
+		"dotted key ends":                   []byte("foo."),
+		"table header ends in a dot":        []byte("[foo."),
+		"carriage return after a bare key":  []byte("foo\r"),
+		"unterminated quoted key":           []byte("\"foo = 1"),
+		"missing key":                       []byte("= 1\n"),
+		"missing value":                     []byte("foo = "),
+		// Write emits \\n newlines, so a \\r\\n after the table name or the equals
+		// sign is valid TOML the fast reader must skip, not misread.
+		"windows line endings":      []byte("config_fingerprint = \"abc\"\r\nshell = \"zsh\"\r\n\r\n[[plugins]]\r\nname = \"one\"\r\nfiles = [\"/one.zsh\"]\r\n"),
+		"array spanning crlf lines": []byte("config_fingerprint = \"abc\"\r\nshell = \"zsh\"\r\n\r\n[[plugins]]\r\nname = \"one\"\r\nfiles = [\r\n\"/one.zsh\",\r\n\"/two.zsh\",\r\n]\r\n"),
+	}
+	for name, contents := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, ok := parseLockFast(contents); ok {
+				t.Fatalf("fast reader accepted:\n%s", contents)
+			}
+			var slow LockedConfig
+			slowErr := toml.Unmarshal(contents, &slow)
+			decoded, err := readLock(contents)
+			if slowErr != nil {
+				if err == nil {
+					t.Fatalf("readLock accepted contents TOML rejects: %v\ncontents:\n%s", slowErr, contents)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readLock: %v", err)
+			}
+			if !reflect.DeepEqual(decoded, slow) {
+				t.Fatalf("readLock diverged from TOML decode:\nread: %#v\nslow: %#v\ncontents:\n%s", decoded, slow, contents)
+			}
+		})
+	}
+}

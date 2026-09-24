@@ -21,6 +21,7 @@ import (
 	"shelf/internal/config"
 	"shelf/internal/filelock"
 	"shelf/internal/lock"
+	"shelf/internal/selfupdate"
 	"shelf/internal/source"
 	"shelf/internal/tui"
 )
@@ -2708,5 +2709,569 @@ func TestFingerprintWithRevisionFailsOnAnUnreadableManifest(t *testing.T) {
 	}
 	if _, err := fingerprintWithRevision("base", unreadable); err == nil {
 		t.Fatal("unreadable manifest was silently treated as missing")
+	}
+}
+
+func TestSourceAndLockModeFlags(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	// The source command renders the lock to stdout in every mode.
+	for _, args := range [][]string{{"source", "--update"}, {"source", "--reinstall"}} {
+		var output bytes.Buffer
+		if err := Execute(args, &output, &bytes.Buffer{}); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if !strings.Contains(output.String(), "echo testing") {
+			t.Fatalf("%v output = %q, want the inline script", args, output.String())
+		}
+	}
+
+	// lock writes the lock file instead of rendering stdout.
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock", "--reinstall"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("lock --reinstall: %v (stderr %q)", err, stderr.String())
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, "data", "plugins.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "echo testing") {
+		t.Fatalf("lock file = %s, want the inline plugin locked", contents)
+	}
+}
+
+func TestSourceFailsOnMissingConfig(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "missing", "config.toml"))
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(directory, "missing"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"source"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("source succeeded with a missing config")
+	}
+}
+
+func TestUpdateFailsOnMissingConfig(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "missing", "config.toml"))
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(directory, "missing"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"update"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("update succeeded with a missing config")
+	}
+}
+
+func TestUpdateInteractiveRejectsNonInteractive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"update", "--interactive", "--non-interactive"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "cannot be used with --non-interactive") {
+		t.Fatalf("err = %v, want the non-interactive conflict error", err)
+	}
+}
+
+func TestCleanInteractiveRejectsNonInteractive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"clean", "--interactive", "--non-interactive"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "cannot be used with --non-interactive") {
+		t.Fatalf("err = %v, want the non-interactive conflict error", err)
+	}
+}
+
+func TestRemoveBareRejectsMissingName(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"remove"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "accepts 1 arg(s)") {
+		t.Fatalf("err = %v, want an argument-count error", err)
+	}
+}
+
+func TestRemoveInteractiveRejectsNameArgumentWithEnv(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.alpha]\ninline = \"echo a\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"remove", "--interactive", "alpha"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined with --interactive") {
+		t.Fatalf("err = %v, want the NAME conflict error", err)
+	}
+}
+
+func TestReloadFailsOnMissingConfig(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "missing", "config.toml"))
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(directory, "missing"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"reload"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("reload succeeded with a missing config")
+	}
+}
+
+func TestSelectPluginsNoPluginsConfigured(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"remove", "--interactive"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "no plugins configured") {
+		t.Fatalf("err = %v, want a no-plugins error", err)
+	}
+}
+
+func TestSelectPluginsSurfacesLoadErrors(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"remove", "--interactive"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "exactly one source") {
+		t.Fatalf("err = %v, want a validation error", err)
+	}
+}
+
+func TestUpdateInteractivePickerErrorStopsUpdate(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	original := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		return nil, errors.New("picker failed")
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"update", "--interactive"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "picker failed") {
+		t.Fatalf("err = %v, want the picker error surfaced", err)
+	}
+}
+
+func TestStatusReportsConfigAndLockErrors(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_SHELL", "")
+
+	run := func() error {
+		return Execute([]string{"status"}, &bytes.Buffer{}, &bytes.Buffer{})
+	}
+	valid := "shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"
+
+	if err := run(); err == nil {
+		t.Fatal("status accepted a missing config")
+	}
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("status accepted a sourceless plugin")
+	}
+	if err := os.WriteFile(configFile, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(configDir, "plugins.lock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("status accepted an unreadable revision manifest")
+	}
+	if err := os.Remove(filepath.Join(configDir, "plugins.lock")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_SHELL", "fish")
+	if err := run(); err == nil {
+		t.Fatal("status accepted an unsupported shell")
+	}
+	t.Setenv("SHELF_SHELL", "")
+	if err := run(); err == nil {
+		t.Fatal("status accepted a missing lock file")
+	}
+
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := "config_fingerprint = \"stale\"\nshell = \"zsh\"\n\n[[plugins]]\n  name = \"test\"\n  inline = \"echo testing\"\n  files = []\n"
+	if err := os.WriteFile(filepath.Join(dataDir, "plugins.lock"), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("status err = %v, want a stale lockfile error", err)
+	}
+}
+
+func TestDoctorReportsConfigAndLockErrors(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_SHELL", "")
+
+	run := func() error {
+		return Execute([]string{"doctor"}, &bytes.Buffer{}, &bytes.Buffer{})
+	}
+	valid := "shell = \"bash\"\n\n[plugins.test]\ninline = \"echo test\"\n"
+
+	if err := run(); err == nil {
+		t.Fatal("doctor accepted a missing config")
+	}
+	if err := os.WriteFile(configFile, []byte("shell = \"bash\"\n\n[plugins.test]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("doctor accepted a sourceless plugin")
+	}
+	if err := os.WriteFile(configFile, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(configDir, "plugins.lock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("doctor accepted an unreadable revision manifest")
+	}
+	if err := os.Remove(filepath.Join(configDir, "plugins.lock")); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := "config_fingerprint = \"stale\"\nshell = \"bash\"\n\n[[plugins]]\n  name = \"test\"\n  inline = \"echo test\"\n  files = []\n"
+	if err := os.WriteFile(filepath.Join(dataDir, "plugins.lock"), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("doctor err = %v, want a stale lockfile error", err)
+	}
+	if err := os.Remove(filepath.Join(dataDir, "plugins.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("doctor accepted a missing lock file")
+	}
+}
+
+func TestDoctorReportsUnavailableShellAndGit(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	t.Setenv("SHELF_SHELL", "")
+
+	write := func(contents string) {
+		t.Helper()
+		if err := os.WriteFile(configFile, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func() error {
+		return Execute([]string{"doctor"}, &bytes.Buffer{}, &bytes.Buffer{})
+	}
+
+	// A PATH without the configured shell surfaces the not-installed error.
+	emptyBin := filepath.Join(directory, "empty-bin")
+	if err := os.MkdirAll(emptyBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", emptyBin)
+	write("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("doctor err = %v, want a not-installed shell error", err)
+	}
+
+	// A fake shell that fails `--version` surfaces the version error.
+	fakeBin := filepath.Join(directory, "fake-bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeZsh := filepath.Join(fakeBin, "zsh")
+	if err := os.WriteFile(fakeZsh, []byte("#!/bin/sh\necho fake zsh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeBash := filepath.Join(fakeBin, "bash")
+	bashScript := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"bash 5 test\"\n  exit 0\nfi\nexit 1\n"
+	if err := os.WriteFile(fakeBash, []byte(bashScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin)
+	if err := run(); err == nil || !strings.Contains(err.Error(), "could not determine zsh version") {
+		t.Fatalf("doctor err = %v, want a shell version error", err)
+	}
+
+	// A healthy shell combined with a Git plugin, but no git on PATH, reports git missing.
+	write("shell = \"bash\"\n\n[plugins.test]\ngithub = \"owner/repo\"\n")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "git is required") {
+		t.Fatalf("doctor err = %v, want a git-required error", err)
+	}
+}
+
+func TestCleanReportsConfigErrors(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	run := func() error {
+		return Execute([]string{"clean"}, &bytes.Buffer{}, &bytes.Buffer{})
+	}
+	if err := run(); err == nil {
+		t.Fatal("clean accepted a missing config")
+	}
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("clean accepted a sourceless plugin")
+	}
+}
+
+func TestCleanInteractiveEmptySelection(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.current]\ninline = \"echo current\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "plugins", "obsolete"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	original := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		return []string{}, nil
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"clean", "--interactive"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "✓ nothing to clean\n" {
+		t.Fatalf("clean output = %q, want nothing-to-clean", stdout.String())
+	}
+}
+
+func TestCleanInteractivePickerError(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.current]\ninline = \"echo current\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "plugins", "obsolete"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	original := interactiveSelect
+	interactiveSelect = func(_ []string, _ io.Writer) ([]string, error) {
+		return nil, errors.New("picker failed")
+	}
+	t.Cleanup(func() { interactiveSelect = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"clean", "--interactive"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "picker failed") {
+		t.Fatalf("err = %v, want the picker error surfaced", err)
+	}
+}
+
+func TestVerboseLockReportsRemovedSources(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.current]\ninline = \"echo current\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Inline plugins live in the lock, so this install directory is unowned.
+	if err := os.MkdirAll(filepath.Join(dataDir, "plugins", "obsolete"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock", "--verbose"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "Removed plugins/obsolete") {
+		t.Fatalf("verbose lock stderr = %q, want a Removed status", stderr.String())
+	}
+}
+
+func TestLockRejectsMissingRequiredLocalSource(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.missing]\nlocal = \"" + filepath.Join(directory, "gone") + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &stderr); err == nil {
+		t.Fatal("lock accepted a missing required local source")
+	}
+}
+
+func TestInitConfirmPromptErrorStopsInit(t *testing.T) {
+	_, _, _ = initTestEnv(t)
+	originalShell := initShellPrompt
+	originalConfirm := initConfirmPrompt
+	initShellPrompt = func(_ *bufio.Reader, _ io.Writer) (config.Shell, error) {
+		return config.Bash, nil
+	}
+	initConfirmPrompt = func(_ string, _ *bufio.Reader, _ io.Writer) (bool, error) {
+		return false, errors.New("stdin closed")
+	}
+	t.Cleanup(func() {
+		initShellPrompt = originalShell
+		initConfirmPrompt = originalConfirm
+	})
+
+	if err := Execute([]string{"init"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "stdin closed") {
+		t.Fatalf("err = %v, want a stdin-closed error", err)
+	}
+}
+
+func TestSelfUpdateQuietSkipsDiagnostics(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
+		if options.Diagnostics != nil {
+			t.Error("quiet self-update retained diagnostics")
+		}
+		return selfupdate.Result{Updated: false, Next: "1.0.0"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update", "--quiet"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSelfUpdateSurfacesUpdateErrors(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, _ selfupdate.Options) (selfupdate.Result, error) {
+		return selfupdate.Result{}, errors.New("download failed")
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "download failed") {
+		t.Fatalf("err = %v, want the download error surfaced", err)
+	}
+}
+
+func TestCommandsRejectAConfigFileAsDirectory(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.WriteFile(configDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(directory, "config.toml"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var stderr bytes.Buffer
+	if err := Execute([]string{"list"}, &bytes.Buffer{}, &stderr); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("list err = %v, want a not-a-directory error", err)
 	}
 }

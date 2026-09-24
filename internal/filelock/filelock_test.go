@@ -283,6 +283,73 @@ func TestAcquireRejectsRegularFile(t *testing.T) {
 	}
 }
 
+// TestAcquireRejectsAPathThroughAFile covers the open error that is not a
+// missing directory: asking for a lock on a path whose parent is a regular
+// file yields ENOTDIR, which must surface instead of being skipped.
+func TestAcquireRejectsAPathThroughAFile(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(file, []byte("shell = \"zsh\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := Acquire(filepath.Join(file, "sub"), true, io.Discard)
+	if err == nil {
+		_ = guard.Release()
+		t.Fatal("locking a path through a regular file should fail")
+	}
+}
+
+// TestWaitBlockingSurfacesNonRetryableErrors pins the error path in the
+// blocking waiter: a flock that fails with something other than EINTR must be
+// reported, not retried forever.
+func TestWaitBlockingSurfacesNonRetryableErrors(t *testing.T) {
+	file, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	if _, err := waitBlocking(file, syscall.LOCK_SH); err == nil {
+		t.Fatal("flock on a closed file should fail")
+	}
+}
+
+// TestWaitContextSurfacesNonRetryableErrors pins the same guarantee in the
+// context-aware waiter.
+func TestWaitContextSurfacesNonRetryableErrors(t *testing.T) {
+	file, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	if _, err := waitContext(context.Background(), file, syscall.LOCK_SH, t.TempDir()); err == nil {
+		t.Fatal("flock on a closed file should fail")
+	}
+}
+
+// TestAcquireSurfacesAnOpenStatFailure pins that a directory that cannot be
+// opened or statted is an error, not a silently-missing directory.
+func TestAcquireSurfacesAnOpenStatFailure(t *testing.T) {
+	original := openDirectory
+	openDirectory = func(string) (*os.File, os.FileInfo, error) {
+		return nil, nil, errors.New("stat failed")
+	}
+	t.Cleanup(func() { openDirectory = original })
+	if _, err := Acquire(t.TempDir(), true, io.Discard); err == nil {
+		t.Fatal("acquire accepted an open/stat failure")
+	}
+}
+
+// TestAcquireSurfacesANonRetryableFlockError pins that a flock failing with
+// something other than EAGAIN/EWOULDBLOCK/EINTR is reported instead of retried.
+func TestAcquireSurfacesANonRetryableFlockError(t *testing.T) {
+	original := flock
+	flock = func(uintptr, int) error { return syscall.EBADF }
+	t.Cleanup(func() { flock = original })
+	if _, err := Acquire(t.TempDir(), true, io.Discard); err == nil {
+		t.Fatal("acquire accepted a non-retryable flock error")
+	}
+}
+
 func TestReleaseIsIdempotent(t *testing.T) {
 	directory := t.TempDir()
 	guard, err := Acquire(directory, true, io.Discard)

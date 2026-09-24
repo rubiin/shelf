@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -453,5 +454,96 @@ func TestSelectRestoresTerminalBeforeAFatalSignal(t *testing.T) {
 	_ = writePipe.Close()
 	if err := <-finished; err == nil {
 		t.Fatal("Select succeeded after its input closed")
+	}
+}
+
+func TestSelectRejectsNoOptions(t *testing.T) {
+	_, err := Select(nil, IO{})
+	if err == nil || !strings.Contains(err.Error(), "no options") {
+		t.Fatalf("err = %v, want a no-options error", err)
+	}
+}
+
+func TestSelectWritesThroughAnOutputFile(t *testing.T) {
+	output, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = output.Close() }()
+	terminal := &fakeTerminal{}
+	selected, err := Select([]string{"alpha", "beta"}, IO{
+		In:         strings.NewReader(" \r"),
+		Out:        output,
+		MakeRaw:    terminal.MakeRaw,
+		Restore:    terminal.Restore,
+		IsTerminal: func(int) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0] != "alpha" {
+		t.Fatalf("selected = %v, want [alpha]", selected)
+	}
+}
+
+func TestSelectIgnoresUnknownKeys(t *testing.T) {
+	selected, _, _, err := runSelect(t, "x \r", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0] != "alpha" {
+		t.Fatalf("selected = %v, want [alpha]", selected)
+	}
+}
+
+// scriptedReader serves one chunk, then err, so tests can drive the escape
+// parser across read boundaries and failures.
+type scriptedReader struct {
+	chunk []byte
+	err   error
+	read  bool
+}
+
+func (r *scriptedReader) Read(p []byte) (int, error) {
+	if !r.read {
+		r.read = true
+		return copy(p, r.chunk), nil
+	}
+	if r.err != nil {
+		return 0, r.err
+	}
+	return 0, io.EOF
+}
+
+func TestSelectSurfacesEscapeSequenceErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		chunk      string
+		err        error
+		wantCancel bool
+	}{
+		{"prefix read error", "\x1b", errors.New("scripted failure"), false},
+		{"sequence read error", "\x1b[", errors.New("scripted failure"), false},
+		{"sequence reaches EOF", "\x1b[", io.EOF, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Select([]string{"alpha"}, IO{
+				In:         &scriptedReader{chunk: []byte(tt.chunk), err: tt.err},
+				Out:        &bytes.Buffer{},
+				MakeRaw:    func(int) (*term.State, error) { return &term.State{}, nil },
+				Restore:    func(int, *term.State) error { return nil },
+				IsTerminal: func(int) bool { return true },
+			})
+			if tt.wantCancel {
+				if !errors.Is(err, ErrCancelled) {
+					t.Fatalf("err = %v, want ErrCancelled", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "read escape sequence") {
+				t.Fatalf("err = %v, want a read-escape-sequence error", err)
+			}
+		})
 	}
 }

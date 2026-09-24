@@ -304,6 +304,36 @@ func TestLoadAcceptsKnownTaggedKeys(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidRemoteURLs(t *testing.T) {
+	for _, remote := range []string{"not a url", "relative/path", "http://"} {
+		cfg := Config{Plugins: map[string]RawPlugin{"bad": {Remote: remote}}}
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("remote %q was accepted", remote)
+		}
+	}
+}
+
+func TestValidateRejectsUnsupportedShell(t *testing.T) {
+	cfg := Config{Shell: "fish", Plugins: map[string]RawPlugin{"demo": {Inline: "echo demo"}}}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "unsupported shell") {
+		t.Fatalf("unsupported shell error = %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyPluginName(t *testing.T) {
+	cfg := Config{Plugins: map[string]RawPlugin{"": {GitHub: "a/b"}}}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "plugin name is empty") {
+		t.Fatalf("empty plugin name error = %v", err)
+	}
+}
+
+func TestLoadMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.toml")
+	if _, err := Load(path); err == nil {
+		t.Fatal("load accepted a missing config file")
+	}
+}
+
 func TestBuildRequiresADirectorySource(t *testing.T) {
 	tests := []struct {
 		name   string

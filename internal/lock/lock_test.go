@@ -3,8 +3,12 @@ package lock
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -831,5 +835,288 @@ func TestNeedsRestoreComparesCheckoutsWithTheLock(t *testing.T) {
 	}
 	if NeedsRestore(LockedConfig{Plugins: []LockedPlugin{{Name: "inline"}, {Name: "remote", Rev: "x"}}}, dataDir, DefaultConcurrency) {
 		t.Fatal("NeedsRestore = true for plugins Restore skips")
+	}
+}
+
+func TestBuildMarksUnmatchedProfile(t *testing.T) {
+	// A profile that no plugin lists invalidates the lock even when nothing is skipped.
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Profiles: []string{"work"}, Inline: "echo demo"},
+	}}
+	locked, err := Build(Context{Shell: "zsh", Profile: "home"}, cfg, testInstaller{directory: t.TempDir()}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked.ProfileMatch != "unmatched" {
+		t.Fatalf("profile_match = %q, want unmatched", locked.ProfileMatch)
+	}
+	if len(locked.Plugins) != 0 {
+		t.Fatalf("locked plugins = %+v, want none", locked.Plugins)
+	}
+}
+
+func TestActive(t *testing.T) {
+	tests := []struct {
+		name     string
+		profiles []string
+		profile  string
+		want     bool
+	}{
+		{name: "no profiles is active for any profile", profiles: nil, profile: "work", want: true},
+		{name: "profiles need a selection", profiles: []string{"work"}, profile: "", want: false},
+		{name: "a listed profile is active", profiles: []string{"work", "home"}, profile: "home", want: true},
+		{name: "an unlisted profile is inactive", profiles: []string{"work"}, profile: "home", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Active(test.profiles, test.profile); got != test.want {
+				t.Fatalf("Active(%v, %q) = %v, want %v", test.profiles, test.profile, got, test.want)
+			}
+		})
+	}
+}
+
+func TestProfileMatches(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Profiles: []string{"work"}},
+	}}
+	tests := []struct {
+		name    string
+		profile string
+		want    bool
+	}{
+		{name: "an empty profile matches", profile: "", want: true},
+		{name: "a listed profile matches", profile: "work", want: true},
+		{name: "an unlisted profile does not", profile: "home", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ProfileMatches(cfg, test.profile); got != test.want {
+				t.Fatalf("ProfileMatches(%q) = %v, want %v", test.profile, got, test.want)
+			}
+		})
+	}
+}
+
+// RunConcurrently must never hang once its context is cancelled: cancellation
+// mid-flight lets in-flight work finish, stops dispatch, and returns cleanly.
+// The exact spread of jobs handed out before the cancellation is scheduler
+// dependent, so the assertions cover the guarantee, not the tie-break.
+func TestRunConcurrentlyStopsOnCancellation(t *testing.T) {
+	t.Run("pre-cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := RunConcurrently(ctx, 4, 2, func(context.Context, int) error { return nil }); err != nil {
+			t.Fatalf("RunConcurrently = %v, want nil", err)
+		}
+	})
+	t.Run("cancelled mid-flight", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		started := make(chan struct{}, 4)
+		release := make(chan struct{})
+		finished := make(chan error, 1)
+		go func() {
+			finished <- RunConcurrently(ctx, 64, 4, func(context.Context, int) error {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-release
+				return nil
+			})
+		}()
+		// Wait until every worker is parked on release; the dispatch loop is
+		// then blocked on a full queue and sees only the cancellation.
+		for range 4 {
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("jobs did not start")
+			}
+		}
+		cancel()
+		close(release)
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatalf("RunConcurrently = %v, want nil", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("RunConcurrently did not return after cancellation")
+		}
+	})
+}
+
+type failingInstaller struct{}
+
+func (failingInstaller) Install(context.Context, source.Request) (source.Installed, error) {
+	return source.Installed{}, errors.New("git clone failed")
+}
+
+func TestBuildReportsInstallerFailure(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{"demo": {GitHub: "rubiin/demo"}}}
+	_, err := Build(Context{Shell: "zsh"}, cfg, failingInstaller{}, ModeNormal)
+	if err == nil || !strings.Contains(err.Error(), `install plugin "demo"`) {
+		t.Fatalf("error = %v, want an install failure naming the plugin", err)
+	}
+}
+
+func TestBuildReportsMissingConfiguredPluginFile(t *testing.T) {
+	directory := t.TempDir()
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: directory, File: "absent.plugin.zsh"},
+	}}
+	_, err := Build(Context{Shell: "zsh"}, cfg, directoryOnlyInstaller{directory: directory}, ModeNormal)
+	if err == nil || !strings.Contains(err.Error(), `select plugin "demo" file "absent.plugin.zsh"`) {
+		t.Fatalf("error = %v, want a missing-file failure", err)
+	}
+}
+
+func TestBuildReportsInvalidUsePattern(t *testing.T) {
+	directory := t.TempDir()
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: directory, Use: []string{"[unclosed"}},
+	}}
+	_, err := Build(Context{Shell: "zsh"}, cfg, directoryOnlyInstaller{directory: directory}, ModeNormal)
+	if err == nil || !strings.Contains(err.Error(), `select plugin "demo" files`) {
+		t.Fatalf("error = %v, want a selection failure", err)
+	}
+}
+
+// The source root defaults to the installed directory when the installer reports none.
+func TestBuildRunsCommandsWithoutAnInstalledRoot(t *testing.T) {
+	directory := t.TempDir()
+	ctx := Context{Shell: "zsh", Diagnostics: io.Discard}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"demo": {Local: directory, Build: []string{"touch generated.zsh"}},
+	}}
+	locked, err := Build(ctx, cfg, testInstaller{directory: directory}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked.Plugins) != 1 || len(locked.Plugins[0].Files) != 1 {
+		t.Fatalf("locked plugins = %+v", locked.Plugins)
+	}
+}
+
+func TestRestoreReportsInstallFailure(t *testing.T) {
+	locked := LockedConfig{Plugins: []LockedPlugin{{Name: "demo", URL: "https://example.test/demo.git", Rev: "abc"}}}
+	err := Restore(locked, failingInstaller{}, DefaultConcurrency)
+	if err == nil || !strings.Contains(err.Error(), `restore plugin "demo" revision "abc"`) {
+		t.Fatalf("error = %v, want a restore failure naming the plugin and revision", err)
+	}
+}
+
+func TestBuildRecordsGistAndPlainGitSources(t *testing.T) {
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{
+		"gist": {Gist: "user/plugin"},
+		"git":  {Git: "https://git.example.test/plugin.git"},
+	}}
+	locked, err := Build(Context{Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir()}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"gist": "gist:user/plugin",
+		"git":  "git:https://git.example.test/plugin.git",
+	}
+	for _, plugin := range locked.Plugins {
+		if plugin.Source != want[plugin.Name] {
+			t.Fatalf("plugin %q source = %q, want %q", plugin.Name, plugin.Source, want[plugin.Name])
+		}
+	}
+}
+
+func TestWriteReportsFilesystemFailures(t *testing.T) {
+	t.Run("mkdir under a file", func(t *testing.T) {
+		base := t.TempDir()
+		file := filepath.Join(base, "not-a-directory")
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(file, "sub", "plugins.lock")
+		if err := Write(path, LockedConfig{}); err == nil {
+			t.Fatal("writing under a regular file succeeded")
+		}
+	})
+	t.Run("rename over a directory", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "plugins.lock")
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := Write(path, LockedConfig{}); err == nil {
+			t.Fatal("renaming over a directory succeeded")
+		}
+	})
+	t.Run("create temp in unwritable directory", func(t *testing.T) {
+		directory := t.TempDir()
+		if err := os.Chmod(directory, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.Chmod(directory, 0o755); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := Write(filepath.Join(directory, "plugins.lock"), LockedConfig{}); err == nil {
+			t.Fatal("writing into an unwritable directory succeeded")
+		}
+	})
+}
+
+// A value the TOML encoder rejects must fail the write before the rename, so the
+// target path is never left behind.
+func TestWriteReportsEncodeFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins.lock")
+	if err := writeTOML(path, struct{ Ch chan int }{make(chan int)}); err == nil {
+		t.Fatal("encoding a channel succeeded")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a failed encode left something at the target path: %v", err)
+	}
+}
+
+func TestReadReportsMissingLock(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "plugins.lock")
+	if _, err := Read(missing); err == nil {
+		t.Fatal("Read on a missing lock succeeded")
+	}
+	if valid, err := Verify(missing, Context{}); err == nil || valid {
+		t.Fatalf("Verify on a missing lock = %v, err = %v", valid, err)
+	}
+}
+
+func TestReadRevisionManifestReportsErrors(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "revisions.lock")
+	if _, err := ReadRevisionManifest(missing); err == nil {
+		t.Fatal("reading a missing manifest succeeded")
+	}
+	path := filepath.Join(t.TempDir(), "revisions.lock")
+	if err := os.WriteFile(path, []byte("plugins = [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRevisionManifest(path); err == nil {
+		t.Fatal("reading a malformed manifest succeeded")
+	}
+}
+
+func TestFingerprintHashesTheConfig(t *testing.T) {
+	contents := []byte("shell = \"zsh\"\n")
+	sum := sha256.Sum256(contents)
+	if got := Fingerprint(contents); got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("Fingerprint = %q, want the sha256 of the contents", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "shelf.toml")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Plugins: map[string]config.RawPlugin{"demo": {Inline: "echo demo"}}}
+	locked, err := Build(Context{ConfigFile: path, Shell: "zsh"}, cfg, testInstaller{directory: t.TempDir()}, ModeNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked.ConfigFingerprint != hex.EncodeToString(sum[:]) {
+		t.Fatalf("built fingerprint = %q, want the hash of the config file", locked.ConfigFingerprint)
 	}
 }

@@ -450,6 +450,111 @@ func TestRemoveIgnoresTrailingCommentsOnTableHeaders(t *testing.T) {
 	}
 }
 
+func TestAddRejectsPluginWithoutSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := "shell = \"zsh\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(path, "ghost", RawPlugin{}); err == nil {
+		t.Fatal("source-less plugin was accepted")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != original {
+		t.Fatalf("failed add changed the config: %s", contents)
+	}
+}
+
+func TestAddFailsWhenConfigFileIsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Add(path, "demo", RawPlugin{Inline: "echo hi"}); err == nil {
+		t.Fatal("add created a config file")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("config file was created: %v", err)
+	}
+}
+
+func TestAddToleratesFileWithoutTrailingNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(path, "demo", RawPlugin{Inline: "echo hi"}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "\n[plugins.demo]") {
+		t.Fatalf("plugin section ran into the last line: %s", contents)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("result does not decode: %v", err)
+	}
+}
+
+func TestAddWritesEverySupportedField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plugin := RawPlugin{
+		Git:      "https://example.test/repo.git",
+		Apply:    []string{"source {file}"},
+		Build:    []string{"make"},
+		Profiles: []string{"work"},
+		Frozen:   true,
+	}
+	if err := Add(path, "full", plugin); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`git = "https://example.test/repo.git"`,
+		`apply = ["source {file}"]`,
+		`build = ["make"]`,
+		`profiles = ["work"]`,
+		"frozen = true",
+	} {
+		if !strings.Contains(string(contents), want) {
+			t.Fatalf("add did not write %s: %s", want, contents)
+		}
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("result does not decode: %v", err)
+	}
+}
+
+func TestRemoveFailsWhenConfigFileIsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Remove(path, "demo"); err == nil {
+		t.Fatal("remove accepted a missing config file")
+	}
+}
+
+func TestRemoveReportsUnknownPlugin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("shell = \"zsh\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := Remove(path, "ghost")
+	if err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("remove unknown plugin error = %v", err)
+	}
+	contents, _ := os.ReadFile(path)
+	if !strings.Contains(string(contents), "[plugins.kept]") {
+		t.Fatalf("remove changed the config: %s", contents)
+	}
+}
+
 func TestRemoveRefusesToEditAnUnparsableConfig(t *testing.T) {
 	// An unmatched [ in a multi-line value must not make remove drop the table
 	// header that follows it (and the rest of the config): an unparsable config

@@ -838,6 +838,305 @@ func TestInstallerFrozenRemoteSkipsConditionalGet(t *testing.T) {
 	}
 }
 
+func TestCheckedOutRevision(t *testing.T) {
+	repository := t.TempDir()
+	revision := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	dataDir := filepath.Join(t.TempDir(), "data")
+	request := Request{Name: "demo", Git: "file://" + repository}
+	installer := NewInstaller(dataDir)
+	if _, err := installer.Install(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	got, err := CheckedOutRevision(context.Background(), dataDir, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != revision {
+		t.Fatalf("checked out revision = %q, want %q", got, revision)
+	}
+}
+
+func TestCheckedOutRevisionRejectsInvalidSource(t *testing.T) {
+	if _, err := CheckedOutRevision(context.Background(), t.TempDir(), Request{Git: "https://example.com"}); err == nil || !strings.Contains(err.Error(), "no repository path") {
+		t.Fatalf("error = %v, want a no-repository-path rejection", err)
+	}
+}
+
+// TestCheckedOutRevisionRejectsNonRepository verifies rev-parse failures surface
+// instead of panicking on a directory that is not a checkout.
+func TestCheckedOutRevisionRejectsNonRepository(t *testing.T) {
+	dataDir := t.TempDir()
+	directory, err := GitDirectory(dataDir, Request{Git: "https://example.com/owner/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckedOutRevision(context.Background(), dataDir, Request{Git: "https://example.com/owner/repo"}); err == nil {
+		t.Fatal("a directory without a git checkout was accepted")
+	}
+}
+
+// TestInstallGitRejectsRepositoryWithoutHEAD verifies an existing clone directory
+// whose repository cannot resolve HEAD is reported instead of crashing.
+func TestInstallGitRejectsRepositoryWithoutHEAD(t *testing.T) {
+	dataDir := t.TempDir()
+	directory, err := GitDirectory(dataDir, Request{Git: "https://example.com/owner/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "-C", directory, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	if _, err := installGit(context.Background(), directory, Request{Git: "https://example.com/owner/repo"}); err == nil {
+		t.Fatal("a commit-less repository was installed")
+	}
+}
+
+// TestInstallerReinstallRefetches verifies Reinstall drops the existing clone first,
+// exercising the removal branch before the fresh clone.
+func TestInstallerReinstallRefetches(t *testing.T) {
+	repository := t.TempDir()
+	commitFile(t, repository, "plugin.zsh", "echo reinstall\n")
+	dataDir := filepath.Join(t.TempDir(), "data")
+	installer := NewInstaller(dataDir)
+	request := Request{Name: "demo", Git: "file://" + repository}
+	if _, err := installer.Install(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	reinstalled := request
+	reinstalled.Reinstall = true
+	if _, err := installer.Install(context.Background(), reinstalled); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+}
+
+// TestInstallGitRejectsCloneParentConflict verifies a fresh clone whose parent path
+// is a file reports the mkdir failure instead of proceeding.
+func TestInstallGitRejectsCloneParentConflict(t *testing.T) {
+	dataDir := t.TempDir()
+	parent := filepath.Join(CloneDir(dataDir), "example.com")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The clone's parent segment is a regular file, so the parent mkdir must fail.
+	if err := os.WriteFile(filepath.Join(parent, "owner"), []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(parent, "owner", "repo")
+	if _, err := installGit(context.Background(), directory, Request{Git: "https://example.com/owner/repo"}); err == nil {
+		t.Fatal("a clone beneath a file path was accepted")
+	}
+}
+
+func TestInstallerRejectsEmptyName(t *testing.T) {
+	if _, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{}); err == nil || !strings.Contains(err.Error(), "name is empty") {
+		t.Fatalf("error = %v, want a name-is-empty rejection", err)
+	}
+}
+
+func TestInstallerRejectsHostlessRemote(t *testing.T) {
+	_, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "remote", Remote: "/plugins/plugin.zsh"})
+	if err == nil || !strings.Contains(err.Error(), "no host") {
+		t.Fatalf("error = %v, want a no-host rejection", err)
+	}
+}
+
+func TestInstallerRejectsHostlessGitSource(t *testing.T) {
+	_, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "demo", Git: "https://example.com"})
+	if err == nil || !strings.Contains(err.Error(), "no repository path") {
+		t.Fatalf("error = %v, want a no-repository-path rejection", err)
+	}
+}
+
+func TestGitDirectoryRejectsUnparseableURL(t *testing.T) {
+	if _, err := GitDirectory(t.TempDir(), Request{Git: "://invalid"}); err == nil {
+		t.Fatal("an unparseable git URL was accepted")
+	}
+}
+
+func TestRemoteDirectoryRejectsUnparseableURL(t *testing.T) {
+	if _, _, err := RemoteDirectory(t.TempDir(), "://invalid"); err == nil {
+		t.Fatal("an unparseable remote URL was accepted")
+	}
+}
+
+// TestRemoteDirectoryRootURLUsesIndex verifies a host root URL maps to an index file.
+func TestRemoteDirectoryRootURLUsesIndex(t *testing.T) {
+	dataDir := t.TempDir()
+	directory, file, err := RemoteDirectory(dataDir, "https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directory != filepath.Join(DownloadDir(dataDir), "example.com") {
+		t.Fatalf("directory = %q, want the host directory", directory)
+	}
+	if file != filepath.Join(directory, "index") {
+		t.Fatalf("file = %q, want an index file", file)
+	}
+}
+
+func TestInstallRemoteRejectsUnparseableURL(t *testing.T) {
+	if _, err := installRemote(context.Background(), t.TempDir(), filepath.Join(t.TempDir(), "file"), Request{Remote: "://invalid"}); err == nil {
+		t.Fatal("an unparseable remote URL was accepted")
+	}
+}
+
+// TestInstallRemoteRejectsDownloadDirFile verifies a download whose target directory
+// is a regular file reports the mkdir failure instead of overwriting it.
+func TestInstallRemoteRejectsDownloadDirFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+	}))
+	defer server.Close()
+
+	base := t.TempDir()
+	downloads := filepath.Join(base, "downloads")
+	if err := os.MkdirAll(downloads, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(downloads, "plugin"), []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installRemote(context.Background(), filepath.Join(downloads, "plugin"), filepath.Join(base, "file"), Request{Remote: server.URL}); err == nil {
+		t.Fatal("a download into a file path was accepted")
+	}
+}
+
+// errorBody fails reads to exercise the download body error path.
+type errorBody struct{}
+
+func (errorBody) Read([]byte) (int, error) { return 0, errors.New("read blew up") }
+func (errorBody) Close() error             { return nil }
+
+func TestInstallRemotePropagatesBodyReadError(t *testing.T) {
+	previous := remoteHTTPClient
+	remoteHTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: errorBody{}, Header: http.Header{}}, nil
+	})}
+	t.Cleanup(func() { remoteHTTPClient = previous })
+
+	if _, err := installRemote(context.Background(), t.TempDir(), filepath.Join(t.TempDir(), "file"), Request{Remote: "https://example.com/plugin.zsh"}); err == nil || !strings.Contains(err.Error(), "read blew up") {
+		t.Fatalf("error = %v, want the body read error", err)
+	}
+}
+
+// TestInstallerRejectsRenameOntoDirectory verifies a download whose final path is an
+// existing directory fails rather than clobbering it.
+func TestInstallerRejectsRenameOntoDirectory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("echo remote\n"))
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	url := server.URL + "/plugin.zsh"
+	directory, file, err := RemoteDirectory(dataDir, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(file, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewInstaller(dataDir).Install(context.Background(), Request{Name: "remote", Remote: url}); err == nil {
+		t.Fatal("a download renamed onto a directory succeeded")
+	}
+}
+
+func TestInstallerExpandsLoneTildeHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	installed, err := NewInstaller(filepath.Join(t.TempDir(), "data")).Install(context.Background(), Request{Name: "home", Local: "~"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Directory != home {
+		t.Fatalf("installed directory = %q, want %q", installed.Directory, home)
+	}
+}
+
+// TestInstallerReportsPinnedRevisionFetchFailure verifies a pinned revision that lies
+// beyond the shallow history and whose remote has vanished is reported as a fetch
+// failure rather than an obscure error.
+func TestInstallerReportsPinnedRevisionFetchFailure(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	sourceURL := "file://" + repository
+	if installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL}); err != nil {
+		t.Fatal(err)
+	} else if installed.Revision != first {
+		t.Fatalf("revision = %q, want the shallow tip %q", installed.Revision, first)
+	}
+	second := commitFile(t, repository, "plugin.zsh", "echo second\n")
+	if err := os.Rename(repository, repository+"-hidden"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Ref: second, Update: false}); err == nil {
+		t.Fatal("install of an unfetchable pinned revision succeeded")
+	}
+}
+
+// TestInstallerReportsPinnedCheckoutFailure verifies a dirty working tree blocks the
+// pinned checkout instead of being silently overwritten.
+func TestInstallerReportsPinnedCheckoutFailure(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	sourceURL := "file://" + repository
+	installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Ref: commitFile(t, repository, "plugin.zsh", "echo first\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installed.Directory, "plugin.zsh"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := commitFile(t, repository, "plugin.zsh", "echo second\n")
+	if _, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Ref: second, Update: true}); err == nil {
+		t.Fatal("pinned checkout over a dirty working tree succeeded")
+	}
+}
+
+// TestInstallerReportsDefaultBranchCheckoutFailure verifies an unpinned update over a
+// dirty working tree reports the default-branch checkout failure.
+func TestInstallerReportsDefaultBranchCheckoutFailure(t *testing.T) {
+	repository := t.TempDir()
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := commitFile(t, repository, "plugin.zsh", "echo first\n")
+	installer := NewInstaller(filepath.Join(t.TempDir(), "data"))
+	sourceURL := "file://" + repository
+	installed, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Revision != first {
+		t.Fatalf("revision = %q, want the shallow tip %q", installed.Revision, first)
+	}
+	if err := os.WriteFile(filepath.Join(installed.Directory, "plugin.zsh"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = commitFile(t, repository, "plugin.zsh", "echo second\n")
+	if _, err := installer.Install(context.Background(), Request{Name: "demo", Git: sourceURL, Update: true}); err == nil {
+		t.Fatal("default-branch checkout over a dirty working tree succeeded")
+	}
+}
+
 // commitFile commits contents to a file in the repository directory and returns the revision, seeding the git repository on first use.
 func commitFile(t *testing.T, directory, file, contents string) string {
 	t.Helper()

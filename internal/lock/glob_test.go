@@ -405,6 +405,30 @@ func TestCollectFilesFollowsSymlinkedRoot(t *testing.T) {
 	}
 }
 
+// A symlink loop makes os.Stat fail with ELOOP, which is not ErrNotExist, so the
+// walk must report it instead of treating the directory as empty.
+func TestCollectFilesReportsNonMissingStatFailure(t *testing.T) {
+	directory := t.TempDir()
+	loop := filepath.Join(directory, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collectFiles(loop); err == nil {
+		t.Fatal("a symlink loop was treated as a missing directory")
+	}
+}
+
+func TestSelectFilesReportsCollectorFailure(t *testing.T) {
+	directory := t.TempDir()
+	loop := filepath.Join(directory, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectFiles(loop, "demo", "zsh", []string{"*.zsh"}, false, nil); err == nil {
+		t.Fatal("a collect failure was swallowed by selection")
+	}
+}
+
 func TestSelectFilesValidatesEveryPattern(t *testing.T) {
 	// Validation must not stop at the first selecting pattern: an invalid glob
 	// later in the list is a config error even when first-match already found
