@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1212,8 +1211,10 @@ func cleanPlugins(paths Paths, output, diagnostics io.Writer, interactive bool) 
 			return err
 		}
 		display := make([]string, len(unowned))
+		byDisplay := make(map[string]string, len(unowned))
 		for index, path := range unowned {
 			display[index] = installDisplayPath(paths.DataDirectory, path)
+			byDisplay[display[index]] = path
 		}
 		selection, err := interactiveSelect(display, output)
 		if errors.Is(err, tui.ErrCancelled) {
@@ -1227,7 +1228,10 @@ func cleanPlugins(paths Paths, output, diagnostics io.Writer, interactive bool) 
 			_, err := fmt.Fprintf(output, "%s nothing to clean\n", writerColors(output).success(successMark))
 			return err
 		}
-		unowned = selection
+		unowned = make([]string, len(selection))
+		for index, name := range selection {
+			unowned[index] = byDisplay[name]
+		}
 	}
 	removed, err := removePaths(unowned)
 	if err != nil {
@@ -1247,13 +1251,11 @@ func cleanPlugins(paths Paths, output, diagnostics io.Writer, interactive bool) 
 	return err
 }
 
-// removePaths deletes paths, longest first so children go before their parents.
+// removePaths deletes paths in the given order. findUnownedPaths returns them
+// with no ancestor-descendant pairs, so any order is safe to delete in.
 func removePaths(paths []string) ([]string, error) {
-	ordered := make([]string, len(paths))
-	copy(ordered, paths)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[j] < ordered[i] })
-	var removed []string
-	for _, path := range ordered {
+	removed := make([]string, 0, len(paths))
+	for _, path := range paths {
 		if err := os.RemoveAll(path); err != nil {
 			return removed, err
 		}
@@ -1282,7 +1284,8 @@ func cleanInstallDirectories(dataDirectory string, cfg config.Config) ([]string,
 	return removePaths(unowned)
 }
 
-// findUnownedPaths lists what cleanInstallDirectories would delete, without deleting.
+// findUnownedPaths lists what cleanPlugins and cleanInstallDirectories would
+// delete, without deleting anything.
 func findUnownedPaths(dataDirectory string, cfg config.Config) ([]string, error) {
 	kept, sources, err := ownedInstallPaths(dataDirectory, cfg)
 	if err != nil {
@@ -1292,7 +1295,7 @@ func findUnownedPaths(dataDirectory string, cfg config.Config) ([]string, error)
 	roots := []string{source.CloneDir(dataDirectory), source.DownloadDir(dataDirectory), filepath.Join(dataDirectory, "plugins")}
 	var removed []string
 	for _, root := range roots {
-		paths, err := removeUnownedPaths(root, kept, sources)
+		paths, err := collectUnownedPaths(root, kept, sources)
 		removed = append(removed, paths...)
 		if err != nil {
 			return removed, err
@@ -1340,9 +1343,9 @@ func keepAncestors(kept map[string]bool, path string) {
 	}
 }
 
-// removeUnownedPaths walks root deleting anything the config does not own; it
-// is the destructive half of findUnownedPaths.
-func removeUnownedPaths(root string, kept, sources map[string]bool) ([]string, error) {
+// collectUnownedPaths walks root listing paths the config does not own; the
+// caller decides what to delete, so the picker and dry runs can run first.
+func collectUnownedPaths(root string, kept, sources map[string]bool) ([]string, error) {
 	var removed []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -1359,9 +1362,6 @@ func removeUnownedPaths(root string, kept, sources map[string]bool) ([]string, e
 				return fs.SkipDir
 			}
 			return nil
-		}
-		if err := os.RemoveAll(path); err != nil {
-			return err
 		}
 		removed = append(removed, path)
 		if entry.IsDir() {

@@ -169,11 +169,11 @@ shelf init
 shelf lock [--update | --reinstall] [--concurrency N] [--force]
 shelf source [--relock | --update | --reinstall] [--concurrency N] [--force]
 shelf reload
-shelf update [--lock] [--concurrency N] [--force]
+shelf update [--lock] [--interactive] [--concurrency N] [--force]
 shelf path
 shelf status
 shelf doctor
-shelf clean
+shelf clean [--interactive]
 shelf list
 shelf info NAME
 shelf add NAME ...
@@ -450,6 +450,19 @@ Update plugin sources and write the refreshed lockfile without printing shell co
 
 ```sh
 shelf update --lock
+```
+
+Choose which plugins to update with an interactive picker:
+
+```sh
+shelf update --interactive
+```
+
+Remove unconfigured installed plugins, choosing what to delete with an
+interactive picker:
+
+```sh
+shelf clean --interactive
 ```
 
 Reinstall all sources:

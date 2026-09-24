@@ -1638,7 +1638,7 @@ func TestUpdateInteractiveUpdatesOnlySelected(t *testing.T) {
 	if err := os.MkdirAll(repository, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	first := gitCommit(t, repository, "plugin.zsh", "echo one\n")
+	gitCommit(t, repository, "plugin.zsh", "echo one\n")
 	configFile := filepath.Join(directory, "config.toml")
 	config := "shell = \"zsh\"\n\n[plugins.demo]\ngit = \"" + repository + "\"\n\n[plugins.other]\ninline = \"echo other\"\n"
 	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
@@ -1672,12 +1672,18 @@ func TestUpdateInteractiveUpdatesOnlySelected(t *testing.T) {
 		t.Fatalf("locked plugins = %d, want 2 (unselected plugins stay locked)", len(locked.Plugins))
 	}
 	for _, plugin := range locked.Plugins {
-		want := first
 		if plugin.Name == "demo" {
-			want = second
+			if plugin.Rev != second {
+				t.Fatalf("plugin %q revision = %q, want updated %q", plugin.Name, plugin.Rev, second)
+			}
+			continue
 		}
-		if plugin.Rev != want {
-			t.Fatalf("plugin %q revision = %q, want %q", plugin.Name, plugin.Rev, want)
+		if plugin.Name != "other" {
+			t.Fatalf("unexpected locked plugin %q", plugin.Name)
+		}
+		// Inline plugins carry no revision; the unselected inline text must survive untouched.
+		if plugin.Inline != "echo other" {
+			t.Fatalf("plugin %q inline = %q, want %q", plugin.Name, plugin.Inline, "echo other")
 		}
 	}
 }
