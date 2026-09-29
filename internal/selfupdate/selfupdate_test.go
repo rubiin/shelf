@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -62,18 +63,29 @@ func checksumLine(t *testing.T, name string, contents []byte) string {
 // The returned counter tracks asset downloads, so tests can assert none happened.
 func newReleaseServer(t *testing.T, tag string, assets map[string]string) (*httptest.Server, *int) {
 	t.Helper()
+	return newReleaseServerFor(t, []release{{TagName: tag}}, assets)
+}
+
+// newReleaseServerFor serves the given releases, newest first, so a test can
+// pin one by tag while the newest is a different release.
+func newReleaseServerFor(t *testing.T, releases []release, assets map[string]string) (*httptest.Server, *int) {
+	t.Helper()
 	var downloads int
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/repos/rubiin/shelf/releases/latest" {
-			entries := make([]asset, 0, len(assets))
-			for _, name := range slices.Sorted(maps.Keys(assets)) {
-				entries = append(entries, asset{Name: name, BrowserDownloadURL: server.URL + "/assets/" + name})
+		switch {
+		case request.URL.Path == "/repos/rubiin/shelf/releases/latest":
+			writeRelease(writer, t, withAssets(server, releases[0], assets))
+			return
+		case strings.HasPrefix(request.URL.Path, "/repos/rubiin/shelf/releases/tags/"):
+			tag := strings.TrimPrefix(request.URL.Path, "/repos/rubiin/shelf/releases/tags/")
+			for _, candidate := range releases {
+				if candidate.TagName == tag {
+					writeRelease(writer, t, withAssets(server, candidate, assets))
+					return
+				}
 			}
-			writer.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(writer).Encode(release{TagName: tag, Assets: entries}); err != nil {
-				t.Errorf("encode release: %v", err)
-			}
+			http.NotFound(writer, request)
 			return
 		}
 		if name, ok := strings.CutPrefix(request.URL.Path, "/assets/"); ok {
@@ -89,6 +101,24 @@ func newReleaseServer(t *testing.T, tag string, assets map[string]string) (*http
 	}))
 	t.Cleanup(server.Close)
 	return server, &downloads
+}
+
+// withAssets lists the served assets on a release, pointing each at the test server.
+func withAssets(server *httptest.Server, candidate release, assets map[string]string) release {
+	entries := make([]asset, 0, len(assets))
+	for _, name := range slices.Sorted(maps.Keys(assets)) {
+		entries = append(entries, asset{Name: name, BrowserDownloadURL: server.URL + "/assets/" + name})
+	}
+	candidate.Assets = entries
+	return candidate
+}
+
+func writeRelease(writer http.ResponseWriter, t *testing.T, payload release) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(payload); err != nil {
+		t.Errorf("encode release: %v", err)
+	}
 }
 
 // pointAPIAt redirects the GitHub API to the server for the duration of the test.
@@ -192,7 +222,7 @@ func TestUpdateForceUpdatesADevelopmentBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Update(context.Background(), Options{CurrentVersion: "dev", Target: target, Force: true})
+	result, err := Update(context.Background(), Options{CurrentVersion: "dev", Target: target, Force: true, Yes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +250,7 @@ func TestUpdateInstallsTheLatestRelease(t *testing.T) {
 	}
 	var diagnostics bytes.Buffer
 
-	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Diagnostics: &diagnostics})
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Diagnostics: &diagnostics, Yes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +329,7 @@ func TestUpdateRejectsAChecksumMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target}); err == nil {
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true}); err == nil {
 		t.Fatal("self-update accepted a checksum mismatch")
 	} else if !strings.Contains(err.Error(), "checksum") {
 		t.Errorf("error = %v, want a checksum mismatch", err)
@@ -433,6 +463,215 @@ func TestUpdateDoesNotDowngradeANewerBinary(t *testing.T) {
 	}
 }
 
+func TestUpdatePinsAnExplicitVersion(t *testing.T) {
+	// An explicit version may move backwards on purpose, unlike an unpinned run.
+	archive := buildArchive(t, "pinned")
+	archiveName := archiveNameFor(t)
+	assets := map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	}
+	server, _ := newReleaseServerFor(t, []release{{TagName: "v2.0.0"}, {TagName: "v1.0.0"}}, assets)
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "2.0.0", Target: target, Version: "1.0.0", Yes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated || result.Next != "1.0.0" {
+		t.Fatalf("result = %+v, want the pinned downgrade to 1.0.0", result)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "pinned" {
+		t.Errorf("binary = %q, %v, want the pinned binary", contents, err)
+	}
+}
+
+func TestUpdateReportsAMissingPinnedRelease(t *testing.T) {
+	server, downloads := newReleaseServerFor(t, []release{{TagName: "v2.0.0"}}, nil)
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Update(context.Background(), Options{CurrentVersion: "2.0.0", Target: target, Version: "9.9.9", Yes: true}); err == nil {
+		t.Fatal("self-update succeeded for a release tag that does not exist")
+	} else if !strings.Contains(err.Error(), "HTTP 404") {
+		t.Errorf("error = %v, want an HTTP 404 for the missing tag", err)
+	}
+	if *downloads != 0 {
+		t.Errorf("missing tag downloaded %d assets, want 0", *downloads)
+	}
+}
+
+func TestUpdateSkipsAPinnedVersionAlreadyInstalled(t *testing.T) {
+	server, downloads := newReleaseServer(t, "v1.2.3", nil)
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.2.3", Target: target, Version: "1.2.3", Yes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Updated || *downloads != 0 {
+		t.Fatalf("result = %+v with %d downloads, want an up-to-date short-circuit", result, *downloads)
+	}
+}
+
+func TestUpdateRequiresConfirmationBeforeReplacing(t *testing.T) {
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, downloads := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	asked := ""
+	_, err := Update(context.Background(), Options{
+		CurrentVersion: "1.0.0",
+		Target:         target,
+		Confirm:        func(version string) (bool, error) { asked = version; return false, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v, want a cancellation pointing at --yes", err)
+	}
+	if asked != "2.0.0" {
+		t.Errorf("confirmed version = %q, want 2.0.0", asked)
+	}
+	if *downloads != 0 {
+		t.Errorf("declined run downloaded %d assets, want 0", *downloads)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "old" {
+		t.Errorf("binary changed: %q, %v", contents, err)
+	}
+}
+
+func TestUpdateRefusesWithoutAConfirmationHookOrYes(t *testing.T) {
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, downloads := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target})
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v, want the --yes hint", err)
+	}
+	if *downloads != 0 {
+		t.Errorf("unconfirmed run downloaded %d assets, want 0", *downloads)
+	}
+}
+
+func TestUpdatePropagatesAConfirmationError(t *testing.T) {
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, downloads := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Update(context.Background(), Options{
+		CurrentVersion: "1.0.0",
+		Target:         target,
+		Confirm:        func(string) (bool, error) { return false, errors.New("prompt exploded") },
+	})
+	if err == nil || !strings.Contains(err.Error(), "prompt exploded") {
+		t.Fatalf("err = %v, want the confirmation error", err)
+	}
+	if *downloads != 0 {
+		t.Errorf("failed confirmation downloaded %d assets, want 0", *downloads)
+	}
+}
+
+func TestUpdateYesSkipsTheConfirmation(t *testing.T) {
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated || result.Next != "2.0.0" {
+		t.Fatalf("result = %+v, want an update to 2.0.0", result)
+	}
+}
+
+func TestOwnerBlocksReplace(t *testing.T) {
+	tests := []struct {
+		name    string
+		fileUID uint32
+		euid    uint32
+		want    bool
+	}{
+		{name: "own install", fileUID: 1000, euid: 1000},
+		{name: "root replaces anything", fileUID: 0, euid: 0},
+		{name: "root replacing a user install", fileUID: 1000, euid: 0},
+		{name: "package-managed install", fileUID: 0, euid: 1000, want: true},
+		{name: "another user's install", fileUID: 1001, euid: 1000, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ownerBlocksReplace(test.fileUID, test.euid); got != test.want {
+				t.Errorf("ownerBlocksReplace(%d, %d) = %t, want %t", test.fileUID, test.euid, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCheckInstallOwnerAllowsOurOwnBinary(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkInstallOwner(target, false); err != nil {
+		t.Errorf("checkInstallOwner refused our own binary: %v", err)
+	}
+	// A missing target is a fresh install, not someone else's.
+	if err := checkInstallOwner(filepath.Join(t.TempDir(), "missing"), false); err != nil {
+		t.Errorf("checkInstallOwner refused a fresh install: %v", err)
+	}
+}
+
+func TestTagForNormalizesTheReleaseTag(t *testing.T) {
+	for input, want := range map[string]string{"1.2.3": "v1.2.3", "v1.2.3": "v1.2.3"} {
+		if got := tagFor(input); got != want {
+			t.Errorf("tagFor(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestUpdateTreatsVPrefixesTheSame(t *testing.T) {
 	// A release tagged "1.2.3" and an installed "v1.2.3" name the same version.
 	for _, test := range []struct {
@@ -485,7 +724,7 @@ func TestUpdatePreservesASymlinkedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: link})
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: link, Yes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +798,7 @@ func TestUpdateReportsAMissingChecksumsAsset(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target}); err == nil {
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true}); err == nil {
 		t.Fatal("self-update succeeded without a checksums asset")
 	} else if !strings.Contains(err.Error(), "checksums") {
 		t.Errorf("error = %v, want a missing-checksums error", err)
@@ -578,7 +817,7 @@ func TestUpdateRejectsAnUnreadableArchive(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target}); err == nil {
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true}); err == nil {
 		t.Fatal("self-update accepted an unreadable archive")
 	} else if !strings.Contains(err.Error(), "archive") {
 		t.Errorf("error = %v, want an archive error", err)
@@ -597,7 +836,7 @@ func TestUpdateRefusesToReplaceADirectory(t *testing.T) {
 	if err := os.Mkdir(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target}); err == nil {
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true}); err == nil {
 		t.Fatal("self-update replaced an existing directory")
 	} else if !strings.Contains(err.Error(), "replace") {
 		t.Errorf("error = %v, want a replace error", err)
@@ -873,7 +1112,7 @@ func TestUpdatePropagatesADownloadError(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target})
+	_, err = Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "download") {
 		t.Fatalf("err = %v, want a download error", err)
 	}

@@ -85,12 +85,24 @@ Release installs can update themselves:
 shelf self-update
 ```
 
-`self-update` fetches the latest
+```text
+shelf self-update [--version TAG] [--yes] [--force]
+```
+
+`self-update` fetches a
 [release](https://github.com/rubiin/shelf/releases), verifies the downloaded
 archive against its published sha256, and replaces the `shelf` binary
-atomically. Installations managed by a package manager (AUR, `.deb`, `.rpm`,
-`.apk`) should keep updating through the package manager instead. Development
-builds refuse to self-update; pass `--force` to update them anyway.
+atomically. It prints the version it selected and asks before replacing the
+binary; `--yes` answers for you. A run with no terminal, or with
+`--non-interactive`, cannot ask and needs `--yes`.
+
+`--version TAG` installs an exact release, which unlike an unpinned update may
+move backwards on purpose.
+
+Installations managed by a package manager (AUR, `.deb`, `.rpm`, `.apk`) should
+keep updating through the package manager instead: `self-update` refuses a
+binary owned by another user, and development builds refuse to update at all.
+Pass `--force` to override both.
 
 ## Getting started
 

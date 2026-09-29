@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // apiBase is a variable so tests can swap in a fake server.
@@ -28,10 +30,18 @@ var client = &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnviro
 type Options struct {
 	// CurrentVersion is the running version; "dev" or empty requires Force.
 	CurrentVersion string
+	// Version pins the release to install; empty takes the newest eligible one.
+	Version string
 	// Target defaults to the running executable.
 	Target string
-	// Force updates a development build to the latest release.
+	// Force updates a development build, an install owned by another user, and
+	// a release equal to the running version.
 	Force bool
+	// Confirm approves the release before the binary is replaced. A nil Confirm
+	// refuses unless Yes is set, so a caller that cannot prompt must opt in.
+	Confirm func(version string) (bool, error)
+	// Yes skips the confirmation prompt.
+	Yes bool
 	// Diagnostics receives progress output; nil disables it.
 	Diagnostics io.Writer
 }
@@ -99,12 +109,20 @@ func Update(ctx context.Context, options Options) (Result, error) {
 	if !options.Force && (options.CurrentVersion == "" || options.CurrentVersion == "dev") {
 		return Result{}, fmt.Errorf("self-update refused: this is a development build (%q); install a release or pass --force", displayVersion(options.CurrentVersion))
 	}
-	latest, err := fetchRelease(ctx)
+	if err := checkInstallOwner(options.Target, options.Force); err != nil {
+		return Result{}, err
+	}
+	latest, err := selectRelease(ctx, options)
 	if err != nil {
 		return Result{}, err
 	}
 	next := strings.TrimPrefix(latest.TagName, "v")
-	if next != "" && !options.Force && alreadyCurrent(options.CurrentVersion, latest.TagName) {
+	if next != "" && options.Version == "" {
+		logf(options.Diagnostics, "Selected shelf %s", next)
+	}
+	// An explicit version may downgrade on purpose; an unpinned update never
+	// does, so a newer or yanked binary is not replaced with an older release.
+	if next != "" && !options.Force && atRequestedVersion(options, latest.TagName) {
 		return Result{Updated: false, Next: next}, nil
 	}
 	name, err := archiveName(runtime.GOOS, runtime.GOARCH)
@@ -115,7 +133,12 @@ func Update(ctx context.Context, options Options) (Result, error) {
 	if !ok {
 		return Result{}, fmt.Errorf("release %s has no %s asset", latest.TagName, name)
 	}
+	// Probe before prompting: an install that cannot be replaced should say so
+	// rather than ask for a confirmation it cannot act on.
 	if err := checkWritable(options.Target); err != nil {
+		return Result{}, err
+	}
+	if err := confirmUpdate(options, next); err != nil {
 		return Result{}, err
 	}
 	logf(options.Diagnostics, "Downloading %s", name)
@@ -260,30 +283,136 @@ func sign(number int) int {
 	return 0
 }
 
-// fetchRelease returns the latest published release.
+// atRequestedVersion reports whether the release is the one already installed:
+// a pinned version matches by tag, and an unpinned update stops at a binary at
+// or above the release so it is never silently downgraded.
+func atRequestedVersion(options Options, tag string) bool {
+	if options.Version != "" {
+		return strings.TrimPrefix(options.CurrentVersion, "v") == strings.TrimPrefix(tag, "v")
+	}
+	return alreadyCurrent(options.CurrentVersion, tag)
+}
+
+// checkInstallOwner refuses to replace a binary owned by another user, which is
+// what a package-managed install looks like from here: /usr/bin/shelf belongs to
+// root, and renaming it needs privileges this user does not have.
+func checkInstallOwner(target string, force bool) error {
+	info, err := os.Stat(target)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", target, err)
+	}
+	// Force is the documented escape hatch.
+	if force {
+		return nil
+	}
+	owner, ok := fileOwner(info)
+	if !ok || !ownerBlocksReplace(owner, uint32(os.Geteuid())) {
+		return nil
+	}
+	return fmt.Errorf("self-update refused: %s is owned by another user, so only its owner can replace it; re-run with elevated privileges, or update shelf the same way it was installed", target)
+}
+
+// ownerBlocksReplace reports whether a binary owned by fileUID can be replaced
+// by a user with euid. Root replaces anything; otherwise only the file's owner
+// can rename it out of the way. Taking the ids as arguments keeps the rule
+// testable without a second user to own the file.
+func ownerBlocksReplace(fileUID, euid uint32) bool {
+	return euid != 0 && fileUID != euid
+}
+
+// fileOwner reports the uid owning a file.
+func fileOwner(info os.FileInfo) (uint32, bool) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return stat.Uid, true
+}
+
+// selectRelease picks the release to install: the pinned tag, or the newest one.
+func selectRelease(ctx context.Context, options Options) (release, error) {
+	if options.Version != "" {
+		return fetchReleaseByTag(ctx, tagFor(options.Version))
+	}
+	return fetchRelease(ctx)
+}
+
+// tagFor normalizes a version to the tag form shelf releases use.
+func tagFor(version string) string {
+	if strings.HasPrefix(version, "v") {
+		return version
+	}
+	return "v" + version
+}
+
+// confirmUpdate asks before the binary is replaced. A caller that cannot prompt
+// has to pass Yes, which is what keeps the command scriptable.
+func confirmUpdate(options Options, version string) error {
+	if options.Yes {
+		return nil
+	}
+	if options.Confirm == nil {
+		return errors.New("self-update cancelled; use --yes to update non-interactively")
+	}
+	approved, err := options.Confirm(version)
+	if err != nil {
+		return err
+	}
+	if !approved {
+		return errors.New("self-update cancelled; use --yes to update non-interactively")
+	}
+	return nil
+}
+
+// fetchRelease returns the newest published release, which GitHub already
+// filters to a non-draft, non-prerelease one.
 func fetchRelease(ctx context.Context) (release, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/repos/rubiin/shelf/releases/latest", nil)
-	if err != nil {
-		return release{}, err
-	}
-	request.Header.Set("User-Agent", "shelf-self-update")
-	response, err := client.Do(request)
-	if err != nil {
-		return release{}, fmt.Errorf("query the latest release: %w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return release{}, fmt.Errorf("query the latest release: HTTP %s", response.Status)
-	}
 	var latest release
-	if err := json.NewDecoder(response.Body).Decode(&latest); err != nil {
-		return release{}, fmt.Errorf("decode the latest release: %w", err)
+	if err := getJSON(ctx, apiBase+"/repos/rubiin/shelf/releases/latest", &latest); err != nil {
+		return release{}, err
 	}
 	if latest.TagName == "" {
 		return release{}, fmt.Errorf("the latest release has no tag")
 	}
 	return latest, nil
+}
+
+// fetchReleaseByTag returns one release by tag, so --version installs exactly
+// what was asked for even when it is older than the release it replaces.
+func fetchReleaseByTag(ctx context.Context, tag string) (release, error) {
+	var pinned release
+	if err := getJSON(ctx, apiBase+"/repos/rubiin/shelf/releases/tags/"+tag, &pinned); err != nil {
+		return release{}, err
+	}
+	if pinned.TagName == "" {
+		return release{}, fmt.Errorf("release %s has no tag", tag)
+	}
+	return pinned, nil
+}
+
+// getJSON performs one release API request and decodes the response.
+func getJSON(ctx context.Context, endpoint string, target any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("User-Agent", "shelf-self-update")
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("query %s: %w", endpoint, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		return fmt.Errorf("query %s: HTTP %s", endpoint, response.Status)
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		return fmt.Errorf("decode the response from %s: %w", endpoint, err)
+	}
+	return nil
 }
 
 // assetURL returns the download URL of a named release asset.

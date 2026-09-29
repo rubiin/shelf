@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,8 +60,10 @@ func TestRootCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selfUpdate.Flags().Lookup("force") == nil {
-		t.Error("self-update flag --force is missing")
+	for _, name := range []string{"force", "yes", "version"} {
+		if selfUpdate.Flags().Lookup(name) == nil {
+			t.Errorf("self-update flag --%s is missing", name)
+		}
 	}
 	for _, name := range []string{"lock", "source", "update"} {
 		command, _, err := root.Find([]string{name})
@@ -308,6 +311,130 @@ func TestSelfUpdatePassesForce(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSelfUpdatePassesThePinnedVersion(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
+		if options.Version != "1.2.3" {
+			t.Errorf("version = %q, want 1.2.3", options.Version)
+		}
+		if options.Confirm == nil {
+			t.Error("self-update ran without a confirmation hook")
+		}
+		return selfupdate.Result{Updated: false, Next: "1.2.3"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update", "--version", "1.2.3"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSelfUpdatePassesYes(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
+		if !options.Yes {
+			t.Error("--yes was not forwarded")
+		}
+		return selfupdate.Result{Updated: false, Next: "1.0.0"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update", "-y"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfirmSelfUpdateRefusesWithoutATerminal(t *testing.T) {
+	command := &cobra.Command{}
+	command.SetIn(&bytes.Buffer{})
+	var stderr bytes.Buffer
+	command.SetErr(&stderr)
+
+	approved, err := confirmSelfUpdate(command, "1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved {
+		t.Error("the prompt approved a release without a terminal")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want no prompt", stderr.String())
+	}
+}
+
+func TestConfirmSelfUpdateRefusesWhenNonInteractive(t *testing.T) {
+	original := nonInteractive
+	nonInteractive = true
+	t.Cleanup(func() { nonInteractive = original })
+
+	command := &cobra.Command{}
+	command.SetIn(&bytes.Buffer{})
+	var stderr bytes.Buffer
+	command.SetErr(&stderr)
+
+	approved, err := confirmSelfUpdate(command, "1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved {
+		t.Error("the prompt approved a release while --non-interactive was set")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want no prompt", stderr.String())
+	}
+}
+
+func TestPromptSelfUpdate(t *testing.T) {
+	tests := []struct {
+		name   string
+		answer string
+		want   bool
+	}{
+		{name: "y", answer: "y\n", want: true},
+		{name: "yes", answer: "YES\n", want: true},
+		{name: "no", answer: "n\n"},
+		{name: "empty line", answer: "\n"},
+		{name: "eof", answer: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var prompt bytes.Buffer
+			approved, err := promptSelfUpdate(strings.NewReader(test.answer), &prompt, "1.2.3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if approved != test.want {
+				t.Errorf("approved = %t, want %t", approved, test.want)
+			}
+			if prompt.String() != "Update shelf to 1.2.3? [y/N] " {
+				t.Errorf("prompt = %q", prompt.String())
+			}
+		})
+	}
+}
+
+func TestPromptSelfUpdateSurfacesIOErrors(t *testing.T) {
+	if _, err := promptSelfUpdate(strings.NewReader("y\n"), errWriter{}, "1.2.3"); err == nil {
+		t.Fatal("promptSelfUpdate swallowed a write error")
+	}
+	if _, err := promptSelfUpdate(errReader{}, io.Discard, "1.2.3"); err == nil {
+		t.Fatal("promptSelfUpdate swallowed a read error")
+	}
+}
+
+// errReader fails every read, standing in for a stdin that cannot be read.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("injected read failure") }
 
 func TestUsesGitCoversEveryForge(t *testing.T) {
 	for name, plugin := range map[string]config.RawPlugin{

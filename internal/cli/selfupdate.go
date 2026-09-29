@@ -1,9 +1,15 @@
 package cli
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"shelf/internal/selfupdate"
 )
@@ -12,12 +18,14 @@ import (
 var runUpdate = selfupdate.Update
 
 func newSelfUpdateCommand() *cobra.Command {
-	var force bool
+	var force, yes bool
+	var version string
 	command := &cobra.Command{
 		Use:   "self-update",
 		Short: "Update shelf to the latest release",
-		Long: "self-update downloads the latest release archive from GitHub, verifies its " +
-			"sha256 against the release's checksums.txt, and replaces the running binary.\n\n" +
+		Long: "self-update downloads a release archive from GitHub, verifies its sha256 against " +
+			"the release's checksums.txt, and replaces the running binary.\n\n" +
+			"--version installs an exact tag, and --yes confirms without a prompt.\n\n" +
 			"Installations managed by a package manager (AUR, deb, rpm, apk) should keep " +
 			"updating through the package manager instead.",
 		Args: cobra.NoArgs,
@@ -28,7 +36,10 @@ func newSelfUpdateCommand() *cobra.Command {
 			}
 			result, err := runUpdate(cmd.Context(), selfupdate.Options{
 				CurrentVersion: Version,
+				Version:        version,
 				Force:          force,
+				Yes:            yes,
+				Confirm:        func(version string) (bool, error) { return confirmSelfUpdate(cmd, version) },
 				Diagnostics:    styledLines(diagnostics, ansiStatusColor),
 			})
 			if err != nil {
@@ -42,6 +53,49 @@ func newSelfUpdateCommand() *cobra.Command {
 			return err
 		},
 	}
-	command.Flags().BoolVar(&force, "force", false, "update even from a development build")
+	command.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
+	command.Flags().StringVar(&version, "version", "", "install a specific release tag instead of the newest")
+	command.Flags().BoolVar(&force, "force", false, "update even from a development build or another user's install")
 	return command
+}
+
+// confirmSelfUpdate asks for approval before the binary is replaced. Without a
+// terminal to prompt on it reports no approval, which turns into the --yes hint
+// rather than a prompt reading from a pipe.
+func confirmSelfUpdate(cmd *cobra.Command, version string) (bool, error) {
+	input := cmd.InOrStdin()
+	if nonInteractive || !terminalInput(input) {
+		return false, nil
+	}
+	return promptSelfUpdate(input, cmd.ErrOrStderr(), version)
+}
+
+// promptSelfUpdate writes the prompt and reads one answer.
+func promptSelfUpdate(input io.Reader, prompt io.Writer, version string) (bool, error) {
+	if _, err := fmt.Fprintf(prompt, "Update shelf to %s? [y/N] ", version); err != nil {
+		return false, err
+	}
+	answer, err := bufio.NewReader(input).ReadString('\n')
+	// A final answer without a newline is still an answer; only a real read
+	// failure is an error.
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	return approvedAnswer(answer), nil
+}
+
+// approvedAnswer reports whether a prompt answer means yes; anything else,
+// including an empty line, declines.
+func approvedAnswer(answer string) bool {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true
+	}
+	return false
+}
+
+// terminalInput reports whether a reader can be prompted on.
+func terminalInput(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
 }
