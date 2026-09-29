@@ -171,6 +171,7 @@ shelf source [--relock | --update | --reinstall] [--concurrency N] [--force]
 shelf reload
 shelf update [--lock] [--interactive] [--concurrency N] [--force]
 shelf path [--json]
+shelf cd NAME [-- COMMAND [ARG...]]
 shelf status [--json]
 shelf doctor
 shelf clean [--interactive | --cache]
@@ -207,6 +208,12 @@ relock, and `zcompile` rebuilds bytecode on the next source. Git checkouts and
 unowned install directories are left for plain `clean`, and your own
 `~/.zcompdump` is never touched. `--cache` and `--interactive` cannot be
 combined.
+
+`shelf cd NAME` opens a shell in the locked plugin's installed directory, and
+`shelf cd NAME -- COMMAND [ARG...]` runs one command there instead. The shell or
+command replaces the shelf process, so exiting returns to the shell that ran
+`shelf cd` and the child's exit status passes through unchanged. Inline plugins
+install nothing, so they have no directory to open.
 
 Global options:
 
@@ -488,6 +495,14 @@ space:
 
 ```sh
 shelf clean --cache
+```
+
+Inspect a plugin's checkout, or run one command inside it without leaving the
+current directory:
+
+```sh
+shelf cd zsh-autosuggestions
+shelf cd zsh-autosuggestions -- git log --oneline -5
 ```
 
 Reinstall all sources:

@@ -1695,6 +1695,152 @@ func TestDoctorReportsHealthyConfigurationAndLock(t *testing.T) {
 	}
 }
 
+// launchRecord captures the directory and argv of the launch cd performs, so
+// the tests never replace the test process.
+type launchRecord struct {
+	directory string
+	argv      []string
+}
+
+// stubLaunch swaps the process-replacing launch for a recorder.
+func stubLaunch(t *testing.T) *launchRecord {
+	t.Helper()
+	record := &launchRecord{}
+	original := launch
+	launch = func(directory string, argv []string) error {
+		record.directory, record.argv = directory, argv
+		return nil
+	}
+	t.Cleanup(func() { launch = original })
+	return record
+}
+
+// cdPaths writes a config and a lock holding one plugin, creating that plugin's
+// install directory when it has one, and points the environment at both.
+func cdPaths(t *testing.T, plugin lock.LockedPlugin) string {
+	t.Helper()
+	paths := pathsFixture(t, "shell = \"bash\"\n\n[plugins.demo]\nlocal = \"/tmp/demo\"\n")
+	if plugin.Directory != "" {
+		if err := os.MkdirAll(plugin.Directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lock.Write(paths.LockFile(""), lock.LockedConfig{Shell: "bash", Plugins: []lock.LockedPlugin{plugin}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", paths.ConfigDirectory)
+	t.Setenv("SHELF_CONFIG_FILE", paths.ConfigFile)
+	t.Setenv("SHELF_DATA_DIR", paths.DataDirectory)
+	t.Setenv("SHELF_SHELL", "")
+	return plugin.Directory
+}
+
+func TestCdOpensTheConfiguredShellInThePluginDirectory(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(t.TempDir(), "demo")
+	if got := cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: directory}); got != directory {
+		t.Fatalf("fixture directory = %q, want %q", got, directory)
+	}
+
+	record := stubLaunch(t)
+	if err := Execute([]string{"cd", "demo"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if record.directory != directory {
+		t.Fatalf("launch directory = %q, want %q", record.directory, directory)
+	}
+	if len(record.argv) != 1 || record.argv[0] != bash {
+		t.Fatalf("launch argv = %v, want [%s]", record.argv, bash)
+	}
+}
+
+func TestCdRunsTheCommandAfterTheSeparator(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(t.TempDir(), "demo")
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: directory})
+
+	record := stubLaunch(t)
+	if err := Execute([]string{"cd", "demo", "--", "bash", "-c", "pwd"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if record.directory != directory {
+		t.Fatalf("launch directory = %q, want %q", record.directory, directory)
+	}
+	if len(record.argv) != 3 || record.argv[0] != bash || record.argv[1] != "-c" || record.argv[2] != "pwd" {
+		t.Fatalf("launch argv = %v, want [%s -c pwd]", record.argv, bash)
+	}
+}
+
+func TestCdRejectsUnknownPlugin(t *testing.T) {
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: filepath.Join(t.TempDir(), "demo")})
+	err := Execute([]string{"cd", "missing"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), `plugin "missing" is not in the lock file`) {
+		t.Fatalf("err = %v, want the missing plugin error", err)
+	}
+}
+
+func TestCdRejectsInlinePlugin(t *testing.T) {
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Inline: "echo demo"})
+	err := Execute([]string{"cd", "demo"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "has no directory") {
+		t.Fatalf("err = %v, want the inline plugin error", err)
+	}
+}
+
+func TestCdRejectsMissingPluginDirectory(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "demo")
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: directory})
+	if err := os.RemoveAll(directory); err != nil {
+		t.Fatal(err)
+	}
+	err := Execute([]string{"cd", "demo"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "open plugin") {
+		t.Fatalf("err = %v, want the missing directory error", err)
+	}
+}
+
+func TestCdRejectsSeparatorWithoutCommand(t *testing.T) {
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: filepath.Join(t.TempDir(), "demo")})
+	err := Execute([]string{"cd", "demo", "--"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "requires a COMMAND after the -- separator") {
+		t.Fatalf("err = %v, want the missing command error", err)
+	}
+}
+
+func TestCdRejectsCommandWithoutPluginName(t *testing.T) {
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: filepath.Join(t.TempDir(), "demo")})
+	err := Execute([]string{"cd", "--", "bash"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "requires a plugin NAME before the -- separator") {
+		t.Fatalf("err = %v, want the missing name error", err)
+	}
+}
+
+func TestCdRejectsCommandThatIsNotOnPath(t *testing.T) {
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: filepath.Join(t.TempDir(), "demo")})
+	err := Execute([]string{"cd", "demo", "--", "shelf-no-such-command"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "shelf-no-such-command") {
+		t.Fatalf("err = %v, want the PATH lookup error", err)
+	}
+}
+
+func TestCdSurfacesLaunchError(t *testing.T) {
+	cdPaths(t, lock.LockedPlugin{Name: "demo", Directory: filepath.Join(t.TempDir(), "demo")})
+	original := launch
+	launch = func(string, []string) error { return errors.New("injected launch failure") }
+	t.Cleanup(func() { launch = original })
+
+	err := Execute([]string{"cd", "demo", "--", "bash"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "injected launch failure") {
+		t.Fatalf("err = %v, want the launch error", err)
+	}
+}
+
 func TestCleanRemovesUnconfiguredPluginDirectories(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")

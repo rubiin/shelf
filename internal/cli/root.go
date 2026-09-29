@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -225,6 +226,24 @@ func NewRoot() *cobra.Command {
 	}
 	pathCommand.Flags().BoolVar(&jsonOutput, "json", false, jsonFlagUsage)
 	command.AddCommand(pathCommand)
+	cdCommand := &cobra.Command{
+		Use:   "cd NAME [-- COMMAND [ARG...]]",
+		Short: "Open a shell in a plugin's directory, or run one command there",
+		Long: "cd replaces the shelf process with a shell, or with one COMMAND, running in the " +
+			"locked plugin's installed directory. Exiting it returns to the shell that ran " +
+			"`shelf cd`.",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, command, err := cdTarget(cmd, args)
+			if err != nil {
+				return err
+			}
+			return withConfigLock(accessRead, func(paths Paths) error {
+				return cdPlugin(paths, name, command)
+			})
+		},
+	}
+	command.AddCommand(cdCommand)
 	statusCommand := &cobra.Command{
 		Use:   "status",
 		Short: "Check installed plugin status",
@@ -941,20 +960,9 @@ func listPlugins(paths Paths, output io.Writer, format outputFormat) error {
 
 // pluginInfo reads a locked plugin's details from the lock file.
 func pluginInfo(paths Paths, name string, output io.Writer, format outputFormat) error {
-	locked, err := lock.Read(paths.LockFile(profile))
+	plugin, err := findLockedPlugin(paths, name)
 	if err != nil {
 		return err
-	}
-	var plugin lock.LockedPlugin
-	found := false
-	for _, candidate := range locked.Plugins {
-		if candidate.Name == name {
-			plugin, found = candidate, true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("plugin %q is not in the lock file", name)
 	}
 	// Local and remote plugins record no source; the directory stands in.
 	source := plugin.Source
@@ -994,6 +1002,95 @@ func pluginInfo(paths Paths, name string, output io.Writer, format outputFormat)
 		if _, err := fmt.Fprintf(output, "- %s: %s\n", colors.header(line[0]), colors.success(fmt.Sprintf("%q", line[1]))); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// findLockedPlugin returns one plugin's entry from the runtime lock.
+func findLockedPlugin(paths Paths, name string) (lock.LockedPlugin, error) {
+	locked, err := lock.Read(paths.LockFile(profile))
+	if err != nil {
+		return lock.LockedPlugin{}, err
+	}
+	for _, plugin := range locked.Plugins {
+		if plugin.Name == name {
+			return plugin, nil
+		}
+	}
+	return lock.LockedPlugin{}, fmt.Errorf("plugin %q is not in the lock file", name)
+}
+
+// cdTarget splits cd's arguments at the -- separator, which pflag reports so
+// that everything after it reaches the command instead of the flag parser.
+func cdTarget(cmd *cobra.Command, args []string) (string, []string, error) {
+	dash := cmd.ArgsLenAtDash()
+	if dash == 0 {
+		return "", nil, errors.New("cd requires a plugin NAME before the -- separator")
+	}
+	if dash < 0 {
+		return args[0], nil, nil
+	}
+	if dash == len(args) {
+		return "", nil, errors.New("cd requires a COMMAND after the -- separator")
+	}
+	return args[0], args[dash:], nil
+}
+
+// cdPlugin hands the process to a shell or one command running in the plugin's
+// installed directory. Inline plugins install nothing, so they have none.
+func cdPlugin(paths Paths, name string, command []string) error {
+	plugin, err := findLockedPlugin(paths, name)
+	if err != nil {
+		return err
+	}
+	if plugin.Directory == "" {
+		return fmt.Errorf("plugin %q has no directory (inline plugins install nothing)", name)
+	}
+	if _, err := os.Stat(plugin.Directory); err != nil {
+		return fmt.Errorf("open plugin %q directory: %w", name, err)
+	}
+	if len(command) == 0 {
+		cfg, err := config.Load(paths.ConfigFile)
+		if err != nil {
+			return err
+		}
+		shell, err := resolveShell(cfg)
+		if err != nil {
+			return err
+		}
+		command = []string{string(shell)}
+	}
+	argv, err := resolveProgram(command)
+	if err != nil {
+		return err
+	}
+	return launch(plugin.Directory, argv)
+}
+
+// resolveProgram pins a program to an absolute path, because the process
+// changes directory before exec and a relative PATH entry would resolve there.
+func resolveProgram(command []string) ([]string, error) {
+	path, err := exec.LookPath(command[0])
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(path) {
+		if path, err = filepath.Abs(path); err != nil {
+			return nil, err
+		}
+	}
+	return append([]string{path}, command[1:]...), nil
+}
+
+// launch replaces the process with argv running in directory, so the child
+// inherits shelf's stdio and its exit status becomes shelf's. It is a var so
+// tests observe the call instead of replacing the test process.
+var launch = func(directory string, argv []string) error {
+	if err := os.Chdir(directory); err != nil {
+		return err
+	}
+	if err := syscall.Exec(argv[0], argv, os.Environ()); err != nil {
+		return fmt.Errorf("exec %s: %w", argv[0], err)
 	}
 	return nil
 }

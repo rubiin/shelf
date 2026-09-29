@@ -37,7 +37,7 @@ func TestRootCommands(t *testing.T) {
 	for _, command := range root.Commands() {
 		commands[command.Name()] = true
 	}
-	for _, name := range []string{"init", "lock", "source", "update", "path", "status", "doctor", "clean", "list", "info", "add", "edit", "remove", "completion", "self-update"} {
+	for _, name := range []string{"init", "lock", "source", "update", "path", "cd", "status", "doctor", "clean", "list", "info", "add", "edit", "remove", "completion", "self-update"} {
 		if !commands[name] {
 			t.Errorf("root command %q is missing", name)
 		}
@@ -530,6 +530,19 @@ func TestPrintPathsSurfacesWriteErrors(t *testing.T) {
 	paths := Paths{ConfigDirectory: "/c", DataDirectory: "/d", ConfigFile: "/c/config.toml"}
 	if err := printPaths(paths, errWriter{}, formatText); err == nil {
 		t.Fatal("printPaths swallowed a write error")
+	}
+}
+
+func TestResolveProgramPinsAnAbsolutePath(t *testing.T) {
+	argv, err := resolveProgram([]string{"echo", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(argv) != 2 || argv[1] != "hi" {
+		t.Fatalf("resolveProgram argv = %v, want [<abs>/echo hi]", argv)
+	}
+	if !filepath.IsAbs(argv[0]) {
+		t.Fatalf("resolveProgram program = %q, want an absolute path", argv[0])
 	}
 }
 

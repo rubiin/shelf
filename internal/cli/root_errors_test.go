@@ -407,6 +407,15 @@ func TestCleanPluginsSurfacesRemoveError(t *testing.T) {
 	}
 }
 
+func TestCdPluginRejectsMissingLockFile(t *testing.T) {
+	withCleanProfile(t)
+	directory := t.TempDir()
+	paths := Paths{DataDirectory: directory, ConfigFile: filepath.Join(directory, "config.toml")}
+	if err := cdPlugin(paths, "demo", []string{"echo"}); err == nil {
+		t.Fatal("cdPlugin accepted a missing lock file")
+	}
+}
+
 func TestCleanCachePathsSurfacesWriteError(t *testing.T) {
 	withCleanProfile(t)
 	paths := pathsFixture(t, "shell = \"bash\"\n\n[plugins.test]\ninline = \"echo test\"\n")
