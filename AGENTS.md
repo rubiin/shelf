@@ -102,9 +102,17 @@ A change is not complete until all of the following hold:
 - Keep comments concise and valuable: state why, not what. Run the `unslop` skill when writing or rewriting comments.
 - Run the `brainstorming` skill to generate and evaluate ideas before implementing them in code.
 - Use sub-agent-driven development whenever working on multiple independent tasks.
+- Never write comments that state the obvious; focus on explaining why the code exists or any non-trivial decisions.
+- Always restrict comments to under 2 lines.
 
 **Communication**
 
+- Be direct and professional. Do not add pleasantries, filler, or sign-offs to the end of responses.
+- Be concise — respect token budgets; prioritize clarity over elaboration.
+- Ground answers in code inspection, not assumptions.
+- Show concrete code snippets rather than descriptions.
+- Use progressive disclosure — start simple, add detail only if needed.
+- Challenge assumptions — point out issues in plans or designs plainly.
 - Be direct and professional. Do not add pleasantries, filler, or sign-offs to the end of responses.
 - Never append footers, signatures, or AI attribution to any text you produce (see Commit standards below for commits).
 

@@ -285,7 +285,7 @@ func TestPluginInfoSurfacesWriteError(t *testing.T) {
 	if err := lockConfig(paths, lock.ModeNormal, 1, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if err := pluginInfo(paths, "test", errWriter{}); err == nil {
+	if err := pluginInfo(paths, "test", errWriter{}, formatText); err == nil {
 		t.Fatal("pluginInfo swallowed a write error")
 	}
 }
@@ -296,7 +296,7 @@ func TestPluginStatusSurfacesWriteError(t *testing.T) {
 	if err := lockConfig(paths, lock.ModeNormal, 1, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if err := pluginStatus(paths, errWriter{}); err == nil {
+	if err := pluginStatus(paths, errWriter{}, formatText); err == nil {
 		t.Fatal("pluginStatus swallowed a write error")
 	}
 }
@@ -305,7 +305,7 @@ func TestPluginStatusRejectsUnsupportedShellEnv(t *testing.T) {
 	withCleanProfile(t)
 	t.Setenv("SHELF_SHELL", "fish")
 	paths := pathsFixture(t, "[plugins.test]\ninline = \"echo test\"\n")
-	if err := pluginStatus(paths, io.Discard); err == nil {
+	if err := pluginStatus(paths, io.Discard, formatText); err == nil {
 		t.Fatal("pluginStatus accepted an unsupported SHELF_SHELL")
 	}
 }

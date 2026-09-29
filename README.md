@@ -170,12 +170,12 @@ shelf lock [--update | --reinstall] [--concurrency N] [--force]
 shelf source [--relock | --update | --reinstall] [--concurrency N] [--force]
 shelf reload
 shelf update [--lock] [--interactive] [--concurrency N] [--force]
-shelf path
-shelf status
+shelf path [--json]
+shelf status [--json]
 shelf doctor
 shelf clean [--interactive]
-shelf list
-shelf info NAME
+shelf list [--json]
+shelf info NAME [--json]
 shelf add NAME ...
 shelf edit
 shelf remove NAME
@@ -189,6 +189,14 @@ installs in flight. Use `--concurrency N` to set a different positive limit.
 
 `shelf info NAME` prints a locked plugin's source, revision, and selected files
 from the lock file, plus the size of its installed directory.
+
+`shelf path`, `shelf status`, `shelf list`, and `shelf info NAME` accept
+`--json`, which writes a machine-readable document to stdout instead of the
+plain-text listing: an array of names for `list`, `size_bytes` in bytes for
+`info`, and an `ok` boolean beside each plugin's `status` detail. Colors never
+reach the JSON, and exit codes are unchanged, so `shelf status --json` still
+exits non-zero when a plugin has drifted. `source` takes no `--json`, so shell
+code can never be replaced by JSON.
 
 Global options:
 

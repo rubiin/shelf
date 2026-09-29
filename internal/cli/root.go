@@ -32,6 +32,9 @@ var Version = "dev"
 // successMark prefixes success messages on stdout.
 const successMark = "✓"
 
+// jsonFlagUsage is shared by the query commands so their help text stays identical.
+const jsonFlagUsage = "print output as JSON"
+
 var (
 	quiet          bool
 	nonInteractive bool
@@ -42,6 +45,7 @@ var (
 	configFile     string
 	profile        string
 	forceUpdate    bool
+	jsonOutput     bool
 )
 
 // Context holds the runtime settings shared by all commands.
@@ -207,7 +211,7 @@ func NewRoot() *cobra.Command {
 	updateCommand.Flags().IntVar(&updateConcurrency, "concurrency", lock.DefaultConcurrency, "maximum concurrent plugin installs")
 	updateCommand.Flags().BoolVar(&forceUpdate, "force", false, "update frozen plugins too")
 	command.AddCommand(updateCommand)
-	command.AddCommand(&cobra.Command{
+	pathCommand := &cobra.Command{
 		Use:   "path",
 		Short: "Print resolved Shelf paths",
 		Args:  cobra.NoArgs,
@@ -216,19 +220,23 @@ func NewRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printPaths(paths, cmd.OutOrStdout())
+			return printPaths(paths, cmd.OutOrStdout(), selectedFormat())
 		},
-	})
-	command.AddCommand(&cobra.Command{
+	}
+	pathCommand.Flags().BoolVar(&jsonOutput, "json", false, jsonFlagUsage)
+	command.AddCommand(pathCommand)
+	statusCommand := &cobra.Command{
 		Use:   "status",
 		Short: "Check installed plugin status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withConfigLock(accessRead, func(paths Paths) error {
-				return pluginStatus(paths, cmd.OutOrStdout())
+				return pluginStatus(paths, cmd.OutOrStdout(), selectedFormat())
 			})
 		},
-	})
+	}
+	statusCommand.Flags().BoolVar(&jsonOutput, "json", false, jsonFlagUsage)
+	command.AddCommand(statusCommand)
 	command.AddCommand(&cobra.Command{
 		Use:   "doctor",
 		Short: "Check Shelf configuration and installation",
@@ -255,26 +263,30 @@ func NewRoot() *cobra.Command {
 	}
 	cleanCommand.Flags().BoolVarP(&cleanInteractive, "interactive", "i", false, "select plugins to clean interactively")
 	command.AddCommand(cleanCommand)
-	command.AddCommand(&cobra.Command{
+	listCommand := &cobra.Command{
 		Use:   "list",
 		Short: "List installed plugins",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withConfigLock(accessRead, func(paths Paths) error {
-				return listPlugins(paths, cmd.OutOrStdout())
+				return listPlugins(paths, cmd.OutOrStdout(), selectedFormat())
 			})
 		},
-	})
-	command.AddCommand(&cobra.Command{
+	}
+	listCommand.Flags().BoolVar(&jsonOutput, "json", false, jsonFlagUsage)
+	command.AddCommand(listCommand)
+	infoCommand := &cobra.Command{
 		Use:   "info NAME",
 		Short: "Show a locked plugin's source, revision, files, and size",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withConfigLock(accessRead, func(paths Paths) error {
-				return pluginInfo(paths, args[0], cmd.OutOrStdout())
+				return pluginInfo(paths, args[0], cmd.OutOrStdout(), selectedFormat())
 			})
 		},
-	})
+	}
+	infoCommand.Flags().BoolVar(&jsonOutput, "json", false, jsonFlagUsage)
+	command.AddCommand(infoCommand)
 	var addGitHub, addGit, addGist, addGitLab, addBitbucket, addCodeberg, addRemote, addLocal, addInline string
 	var addOptional bool
 	var addRev, addBranch, addTag, addProto, addDir, addFile string
@@ -902,13 +914,17 @@ func initConfig(cmd *cobra.Command, paths Paths, flagShell string) error {
 	return nil
 }
 
-func listPlugins(paths Paths, output io.Writer) error {
+func listPlugins(paths Paths, output io.Writer, format outputFormat) error {
 	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
 	// PluginNames also reports dotted keys, which PluginOrder misses.
-	for _, name := range lock.PluginNames(cfg) {
+	names := lock.PluginNames(cfg)
+	if format == formatJSON {
+		return encodeJSON(output, names)
+	}
+	for _, name := range names {
 		if _, err := fmt.Fprintln(output, name); err != nil {
 			return err
 		}
@@ -917,8 +933,7 @@ func listPlugins(paths Paths, output io.Writer) error {
 }
 
 // pluginInfo reads a locked plugin's details from the lock file.
-func pluginInfo(paths Paths, name string, output io.Writer) error {
-	colors := writerColors(output)
+func pluginInfo(paths Paths, name string, output io.Writer, format outputFormat) error {
 	locked, err := lock.Read(paths.LockFile(profile))
 	if err != nil {
 		return err
@@ -942,23 +957,31 @@ func pluginInfo(paths Paths, name string, output io.Writer) error {
 	case source == "":
 		source = plugin.Directory
 	}
-	var lines [][2]string
-	if source != "" {
-		lines = append(lines, [2]string{"source", source})
-	}
-	if plugin.Rev != "" {
-		lines = append(lines, [2]string{"rev", plugin.Rev})
-	}
-	for _, file := range plugin.Files {
-		lines = append(lines, [2]string{"files", file})
-	}
+	payload := infoPayload{Name: name, Source: source, Rev: plugin.Rev, Files: plugin.Files}
 	// Inline plugins install nothing, so they have no size.
 	if plugin.Directory != "" {
 		total, err := directorySize(plugin.Directory)
 		if err != nil {
 			return fmt.Errorf("measure plugin %q size: %w", name, err)
 		}
-		lines = append(lines, [2]string{"size", humanSize(total)})
+		payload.SizeBytes = &total
+	}
+	if format == formatJSON {
+		return encodeJSON(output, payload)
+	}
+	colors := writerColors(output)
+	var lines [][2]string
+	if payload.Source != "" {
+		lines = append(lines, [2]string{"source", payload.Source})
+	}
+	if payload.Rev != "" {
+		lines = append(lines, [2]string{"rev", payload.Rev})
+	}
+	for _, file := range payload.Files {
+		lines = append(lines, [2]string{"files", file})
+	}
+	if payload.SizeBytes != nil {
+		lines = append(lines, [2]string{"size", humanSize(*payload.SizeBytes)})
 	}
 	for _, line := range lines {
 		if _, err := fmt.Fprintf(output, "- %s: %s\n", colors.header(line[0]), colors.success(fmt.Sprintf("%q", line[1]))); err != nil {
@@ -1002,7 +1025,15 @@ func humanSize(total int64) string {
 	return fmt.Sprintf("%.1f%s", value, units[index])
 }
 
-func printPaths(paths Paths, output io.Writer) error {
+func printPaths(paths Paths, output io.Writer, format outputFormat) error {
+	if format == formatJSON {
+		return encodeJSON(output, pathsPayload{
+			ConfigDir:  paths.ConfigDirectory,
+			DataDir:    paths.DataDirectory,
+			ConfigFile: paths.ConfigFile,
+			LockFile:   paths.LockFile(profile),
+		})
+	}
 	for _, entry := range []struct {
 		name string
 		path string
@@ -1030,7 +1061,7 @@ var gitHead = func(ctx context.Context, directory string) ([]byte, error) {
 	return exec.CommandContext(ctx, "git", "-C", directory, "rev-parse", "HEAD").Output()
 }
 
-func pluginStatus(paths Paths, output io.Writer) error {
+func pluginStatus(paths Paths, output io.Writer, format outputFormat) error {
 	cfg, fingerprint, err := loadConfigWithFingerprint(paths.ConfigFile)
 	if err != nil {
 		return err
@@ -1088,20 +1119,28 @@ func pluginStatus(paths Paths, output io.Writer) error {
 		return err
 	}
 	var unhealthy bool
-	outColors := writerColors(output)
+	payload := make([]statusPayload, 0, len(plugins))
 	for index, plugin := range plugins {
 		state := states[index]
 		if state != "ok" {
 			unhealthy = true
 		}
-		var display string
-		if state == "ok" {
-			display = outColors.success(state)
-		} else {
-			display = outColors.error(state)
-		}
-		if _, err := fmt.Fprintf(output, "%s: %s\n", plugin.Name, display); err != nil {
+		payload = append(payload, statusPayload{Name: plugin.Name, Ok: state == "ok", State: state})
+	}
+	if format == formatJSON {
+		if err := encodeJSON(output, payload); err != nil {
 			return err
+		}
+	} else {
+		outColors := writerColors(output)
+		for _, entry := range payload {
+			display := outColors.success(entry.State)
+			if !entry.Ok {
+				display = outColors.error(entry.State)
+			}
+			if _, err := fmt.Fprintf(output, "%s: %s\n", entry.Name, display); err != nil {
+				return err
+			}
 		}
 	}
 	if unhealthy {

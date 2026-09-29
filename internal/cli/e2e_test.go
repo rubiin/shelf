@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -248,6 +249,45 @@ func TestPathPrintsResolvedPaths(t *testing.T) {
 		"lock_file=" + filepath.Join(dataDir, "plugins.lock") + "\n"
 	if output.String() != want {
 		t.Fatalf("path output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestPathJSONPrintsResolvedPaths(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	configFile := filepath.Join(configDir, "config.toml")
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+
+	var output bytes.Buffer
+	if err := Execute([]string{"path", "--json"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var got pathsPayload
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("path --json output %q is not JSON: %v", output.String(), err)
+	}
+	want := pathsPayload{ConfigDir: configDir, DataDir: dataDir, ConfigFile: configFile, LockFile: filepath.Join(dataDir, "plugins.lock")}
+	if got != want {
+		t.Fatalf("path --json = %+v, want %+v", got, want)
+	}
+}
+
+// TestSourceRejectsJSONFlag keeps --json off source, where JSON would reach eval.
+func TestSourceRejectsJSONFlag(t *testing.T) {
+	t.Setenv("SHELF_CONFIG_FILE", filepath.Join(t.TempDir(), "config.toml"))
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"source", "--json"}, &stdout, &stderr); err == nil {
+		t.Fatal("source accepted --json")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("source wrote %q to stdout when rejecting --json", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "unknown flag") {
+		t.Fatalf("source stderr = %q, want an unknown-flag error", stderr.String())
 	}
 }
 
@@ -1016,6 +1056,73 @@ func TestListPrintsLockedPluginNames(t *testing.T) {
 	}
 }
 
+func TestListJSONPrintsNamesArray(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.first]\ninline = \"echo first\"\n\n[plugins.second]\ninline = \"echo second\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"list", "--json"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "[\n  \"first\",\n  \"second\"\n]\n"
+	if output.String() != want {
+		t.Fatalf("list --json output = %q, want %q", output.String(), want)
+	}
+}
+
+// A pluginless config still has to yield an empty array, not null, for scripts.
+func TestListJSONPrintsEmptyArrayWithoutPlugins(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"list", "--json"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "[]\n" {
+		t.Fatalf("list --json output = %q, want an empty array", output.String())
+	}
+}
+
+// --json must win over --color: a colored document is valid to the eye and
+// unparseable to a script.
+func TestListJSONIgnoresColorMode(t *testing.T) {
+	directory := t.TempDir()
+	configFile := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo test\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"list", "--json", "--color", "always"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(output.String(), '\x1b') {
+		t.Fatalf("list --json --color always emitted escapes: %q", output.String())
+	}
+	if !json.Valid(output.Bytes()) {
+		t.Fatalf("list --json --color always output %q is not JSON", output.String())
+	}
+}
+
 func TestInfoReportsLockedGitPlugin(t *testing.T) {
 	directory := t.TempDir()
 	repository := filepath.Join(directory, "repository")
@@ -1155,6 +1262,81 @@ func TestInfoRejectsUnknownPlugin(t *testing.T) {
 	}
 }
 
+// Inline plugins install nothing, so the empty rev, files, and size fields drop out.
+func TestInfoJSONOmitsEmptyFields(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.test]\ninline = \"echo testing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"info", "test", "--json"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n  \"name\": \"test\",\n  \"source\": \"inline\"\n}\n"
+	if output.String() != want {
+		t.Fatalf("info --json output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestInfoJSONReportsFilesAndSizeBytes(t *testing.T) {
+	directory := t.TempDir()
+	pluginDir := filepath.Join(directory, "plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contents := "echo local\n"
+	pluginFile := filepath.Join(pluginDir, "demo.zsh")
+	if err := os.WriteFile(pluginFile, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"" + pluginDir + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"info", "demo", "--json"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var got infoPayload
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("info --json output %q is not JSON: %v", output.String(), err)
+	}
+	if got.Name != "demo" || got.Source != pluginDir {
+		t.Errorf("info --json name/source = %q/%q, want demo/%q", got.Name, got.Source, pluginDir)
+	}
+	if !slices.Equal(got.Files, []string{pluginFile}) {
+		t.Errorf("info --json files = %q, want %q", got.Files, []string{pluginFile})
+	}
+	if got.SizeBytes == nil || *got.SizeBytes != int64(len(contents)) {
+		t.Errorf("info --json size_bytes = %v, want %d", got.SizeBytes, len(contents))
+	}
+}
+
 func TestInfoColorModes(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
@@ -1229,6 +1411,86 @@ func TestStatusReportsHealthyLockedPlugins(t *testing.T) {
 	}
 	if output.String() != "first: ok\nsecond: ok\n" {
 		t.Fatalf("status output = %q", output.String())
+	}
+}
+
+func TestStatusJSONReportsOkAndState(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.first]\ninline = \"echo first\"\n\n[plugins.second]\ninline = \"echo second\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"status", "--json"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var got []statusPayload
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("status --json output %q is not JSON: %v", output.String(), err)
+	}
+	want := []statusPayload{{Name: "first", Ok: true, State: "ok"}, {Name: "second", Ok: true, State: "ok"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("status --json = %+v, want %+v", got, want)
+	}
+}
+
+// Drift has to fail the command while still printing the full report, so a
+// script can both detect and describe the problem in one run.
+func TestStatusJSONReportsDriftAndStillFails(t *testing.T) {
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockedRevision := gitCommit(t, repository, "plugin.zsh", "echo first\n")
+	currentRevision := gitCommit(t, repository, "plugin.zsh", "echo second\n")
+
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	config := "shell = \"zsh\"\n\n[plugins.test]\ngit = \"" + repository + "\"\nrev = \"" + lockedRevision + "\"\n"
+	if err := os.WriteFile(configFile, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+	if err := Execute([]string{"lock"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := source.GitDirectory(filepath.Join(directory, "data"), source.Request{Git: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "-C", checkout, "checkout", "--detach", currentRevision).CombinedOutput(); err != nil {
+		t.Fatalf("checkout drifted revision: %v\n%s", err, output)
+	}
+
+	var output bytes.Buffer
+	if err := Execute([]string{"status", "--json"}, &output, &bytes.Buffer{}); err == nil {
+		t.Fatal("status --json succeeded for a drifted revision")
+	}
+	var got []statusPayload
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("status --json output %q is not JSON: %v", output.String(), err)
+	}
+	want := []statusPayload{{Name: "test", Ok: false, State: "revision " + currentRevision + ", want " + lockedRevision}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("status --json = %+v, want %+v", got, want)
 	}
 }
 

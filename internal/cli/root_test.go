@@ -511,7 +511,7 @@ func TestEditConfigRejectsUnbalancedEditorQuotes(t *testing.T) {
 }
 
 func TestListPluginsReportsLoadErrors(t *testing.T) {
-	if err := listPlugins(Paths{ConfigFile: filepath.Join(t.TempDir(), "missing.toml")}, io.Discard); err == nil {
+	if err := listPlugins(Paths{ConfigFile: filepath.Join(t.TempDir(), "missing.toml")}, io.Discard, formatText); err == nil {
 		t.Fatal("listPlugins accepted a missing config")
 	}
 }
@@ -521,14 +521,14 @@ func TestListPluginsSurfacesWriteErrors(t *testing.T) {
 	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.a]\ninline = \"echo a\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := listPlugins(Paths{ConfigFile: configFile}, errWriter{}); err == nil {
+	if err := listPlugins(Paths{ConfigFile: configFile}, errWriter{}, formatText); err == nil {
 		t.Fatal("listPlugins swallowed a write error")
 	}
 }
 
 func TestPrintPathsSurfacesWriteErrors(t *testing.T) {
 	paths := Paths{ConfigDirectory: "/c", DataDirectory: "/d", ConfigFile: "/c/config.toml"}
-	if err := printPaths(paths, errWriter{}); err == nil {
+	if err := printPaths(paths, errWriter{}, formatText); err == nil {
 		t.Fatal("printPaths swallowed a write error")
 	}
 }
@@ -537,7 +537,7 @@ func TestPluginInfoRejectsMissingLockFile(t *testing.T) {
 	withCleanProfile(t)
 	directory := t.TempDir()
 	paths := Paths{DataDirectory: directory, ConfigFile: filepath.Join(directory, "config.toml")}
-	if err := pluginInfo(paths, "demo", io.Discard); err == nil {
+	if err := pluginInfo(paths, "demo", io.Discard, formatText); err == nil {
 		t.Fatal("pluginInfo accepted a missing lock file")
 	}
 }
@@ -551,7 +551,7 @@ func TestPluginInfoRejectsUnmeasurablePluginSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := Paths{DataDirectory: directory, ConfigFile: filepath.Join(directory, "config.toml")}
-	if err := pluginInfo(paths, "demo", io.Discard); err == nil || !strings.Contains(err.Error(), "size") {
+	if err := pluginInfo(paths, "demo", io.Discard, formatText); err == nil || !strings.Contains(err.Error(), "size") {
 		t.Fatalf("pluginInfo err = %v, want a size error for a vanished directory", err)
 	}
 }
