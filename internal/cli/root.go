@@ -247,21 +247,28 @@ func NewRoot() *cobra.Command {
 			})
 		},
 	})
-	var cleanInteractive bool
+	var cleanInteractive, cleanCache bool
 	cleanCommand := &cobra.Command{
 		Use:   "clean",
-		Short: "Remove unconfigured installed plugins",
+		Short: "Remove unconfigured installed plugins or cached files",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if cleanInteractive && nonInteractive {
 				return fmt.Errorf("clean --interactive cannot be used with --non-interactive")
 			}
+			if cleanCache && cleanInteractive {
+				return fmt.Errorf("clean --cache cannot be used with --interactive")
+			}
 			return withConfigLock(accessWrite, func(paths Paths) error {
+				if cleanCache {
+					return cleanCachePaths(paths, cmd.OutOrStdout())
+				}
 				return cleanPlugins(paths, cmd.OutOrStdout(), cmd.ErrOrStderr(), cleanInteractive)
 			})
 		},
 	}
 	cleanCommand.Flags().BoolVarP(&cleanInteractive, "interactive", "i", false, "select plugins to clean interactively")
+	cleanCommand.Flags().BoolVar(&cleanCache, "cache", false, "remove regenerable caches instead of unconfigured plugins")
 	command.AddCommand(cleanCommand)
 	listCommand := &cobra.Command{
 		Use:   "list",
@@ -1288,6 +1295,78 @@ func cleanPlugins(paths Paths, output, diagnostics io.Writer, interactive bool) 
 	}
 	_, err = fmt.Fprintf(output, "%s cleaned: %d paths\n", colors.success(successMark), len(removed))
 	return err
+}
+
+// cleanCachePaths deletes regenerable artifacts: zsh bytecode, downloaded
+// payloads the lock can re-fetch, and any compdump Shelf owns. Install
+// directories and git checkouts are left for plain `clean` to prune.
+func cleanCachePaths(paths Paths, output io.Writer) error {
+	cached, err := findCachePaths(paths.DataDirectory)
+	if err != nil {
+		return err
+	}
+	colors := writerColors(output)
+	if len(cached) == 0 {
+		_, err := fmt.Fprintf(output, "%s nothing to clean\n", colors.success(successMark))
+		return err
+	}
+	removed, err := removePaths(cached)
+	if err != nil {
+		return err
+	}
+	for _, path := range removed {
+		if _, err := fmt.Fprintf(output, "removed: %s\n", installDisplayPath(paths.DataDirectory, path)); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(output, "%s cleaned: %d cached paths\n", colors.success(successMark), len(removed))
+	return err
+}
+
+// findCachePaths lists the entries cleanCachePaths deletes, ordered so no entry
+// is nested inside another.
+func findCachePaths(dataDirectory string) ([]string, error) {
+	compiled, err := findCompiledFiles(dataDirectory)
+	if err != nil {
+		return nil, err
+	}
+	paths := compiled
+	downloads := source.DownloadDir(dataDirectory)
+	if _, err := os.Stat(downloads); err == nil {
+		paths = append(paths, downloads)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	compdumps, err := filepath.Glob(filepath.Join(dataDirectory, "zcompdump*"))
+	if err != nil {
+		return nil, err
+	}
+	return append(paths, compdumps...), nil
+}
+
+// findCompiledFiles lists the zsh bytecode the zcompile template wrote. Those
+// files sit beside their sources and are rebuilt on the next load, so they are
+// cache even though they live inside owned checkouts.
+func findCompiledFiles(dataDirectory string) ([]string, error) {
+	var files []string
+	for _, root := range []string{source.CloneDir(dataDirectory), filepath.Join(dataDirectory, "plugins")} {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				if errors.Is(walkErr, fs.ErrNotExist) {
+					return nil
+				}
+				return walkErr
+			}
+			if !entry.IsDir() && filepath.Ext(path) == ".zwc" {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return files, err
+		}
+	}
+	return files, nil
 }
 
 // removePaths deletes paths in the given order. findUnownedPaths returns them

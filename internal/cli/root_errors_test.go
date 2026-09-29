@@ -120,6 +120,15 @@ func TestCleanFunctionsFailOnUnreadableDirectories(t *testing.T) {
 	if _, err := collectUnownedPaths(plugins, nil, nil); err == nil {
 		t.Fatal("collectUnownedPaths tolerated an unlistable root")
 	}
+	if err := cleanCachePaths(paths, io.Discard); err == nil {
+		t.Fatal("cleanCachePaths tolerated an unlistable plugins directory")
+	}
+	if _, err := findCachePaths(paths.DataDirectory); err == nil {
+		t.Fatal("findCachePaths tolerated an unlistable plugins directory")
+	}
+	if _, err := findCompiledFiles(paths.DataDirectory); err == nil {
+		t.Fatal("findCompiledFiles tolerated an unlistable plugins directory")
+	}
 }
 
 // mustLoadFixture decodes the fixture config; the test never reaches it after
@@ -395,6 +404,42 @@ func TestCleanPluginsSurfacesRemoveError(t *testing.T) {
 	chmodLocked(t, plugins, 0o555)
 	if err := cleanPlugins(paths, io.Discard, io.Discard, false); err == nil {
 		t.Fatal("cleanPlugins removed an orphan from a read-only directory")
+	}
+}
+
+func TestCleanCachePathsSurfacesWriteError(t *testing.T) {
+	withCleanProfile(t)
+	paths := pathsFixture(t, "shell = \"bash\"\n\n[plugins.test]\ninline = \"echo test\"\n")
+	cached := filepath.Join(paths.DataDirectory, "repos", "demo.zsh.zwc")
+	if err := os.MkdirAll(filepath.Dir(cached), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cached, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanCachePaths(paths, errWriter{}); err == nil {
+		t.Fatal("cleanCachePaths swallowed a write error")
+	}
+	if _, err := os.Stat(cached); err == nil {
+		t.Fatal("cleanCachePaths did not remove the compiled file")
+	}
+}
+
+func TestCleanCachePathsSurfacesRemoveError(t *testing.T) {
+	withCleanProfile(t)
+	paths := pathsFixture(t, "shell = \"bash\"\n\n[plugins.test]\ninline = \"echo test\"\n")
+	plugins := filepath.Join(paths.DataDirectory, "plugins")
+	if err := os.MkdirAll(plugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	compiled := filepath.Join(plugins, "orphan.zsh.zwc")
+	if err := os.WriteFile(compiled, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Walkable but not writable: the bytecode lists cleanly and RemoveAll fails.
+	chmodLocked(t, plugins, 0o555)
+	if err := cleanCachePaths(paths, io.Discard); err == nil {
+		t.Fatal("cleanCachePaths removed bytecode from a read-only directory")
 	}
 }
 

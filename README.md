@@ -173,7 +173,7 @@ shelf update [--lock] [--interactive] [--concurrency N] [--force]
 shelf path [--json]
 shelf status [--json]
 shelf doctor
-shelf clean [--interactive]
+shelf clean [--interactive | --cache]
 shelf list [--json]
 shelf info NAME [--json]
 shelf add NAME ...
@@ -197,6 +197,16 @@ plain-text listing: an array of names for `list`, `size_bytes` in bytes for
 reach the JSON, and exit codes are unchanged, so `shelf status --json` still
 exits non-zero when a plugin has drifted. `source` takes no `--json`, so shell
 code can never be replaced by JSON.
+
+`shelf clean` removes installed sources the configuration no longer owns, with
+`--interactive` picking which. `shelf clean --cache` clears regenerable caches
+instead: the `.zwc` bytecode the `zcompile` template writes, the downloaded
+payloads under `$XDG_DATA_HOME/shelf/downloads`, and any `zcompdump` Shelf owns.
+Downloaded payloads come back on the next `shelf lock`, `shelf update`, or
+relock, and `zcompile` rebuilds bytecode on the next source. Git checkouts and
+unowned install directories are left for plain `clean`, and your own
+`~/.zcompdump` is never touched. `--cache` and `--interactive` cannot be
+combined.
 
 Global options:
 
@@ -471,6 +481,13 @@ interactive picker:
 
 ```sh
 shelf clean --interactive
+```
+
+Drop regenerable caches after changing an `apply` template, or to reclaim disk
+space:
+
+```sh
+shelf clean --cache
 ```
 
 Reinstall all sources:

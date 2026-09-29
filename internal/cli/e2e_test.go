@@ -1807,6 +1807,140 @@ func TestCleanReportsNothingToRemove(t *testing.T) {
 	}
 }
 
+func TestCleanCacheRemovesCompiledFilesAndDownloads(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.kept]\ngithub = \"rubiin/kept\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cached := []string{
+		filepath.Join(dataDir, "repos", "github.com", "rubiin", "kept", "kept.plugin.zsh.zwc"),
+		filepath.Join(dataDir, "plugins", "legacy", "old.zsh.zwc"),
+		filepath.Join(dataDir, "downloads", "example.com", "plugin.zsh"),
+		filepath.Join(dataDir, "zcompdump-shelf-abc"),
+	}
+	for _, path := range cached {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Plain sources are not cache: only the bytecode beside them goes.
+	sources := []string{
+		filepath.Join(dataDir, "repos", "github.com", "rubiin", "kept", "kept.plugin.zsh"),
+		filepath.Join(dataDir, "plugins", "legacy", "old.zsh"),
+	}
+	for _, path := range sources {
+		if err := os.WriteFile(path, []byte("echo hi\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	var output bytes.Buffer
+	if err := Execute([]string{"clean", "--cache"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "removed: repos/github.com/rubiin/kept/kept.plugin.zsh.zwc\n" +
+		"removed: plugins/legacy/old.zsh.zwc\n" +
+		"removed: downloads\n" +
+		"removed: zcompdump-shelf-abc\n" +
+		"✓ cleaned: 4 cached paths\n"
+	if output.String() != want {
+		t.Fatalf("clean --cache output = %q, want %q", output.String(), want)
+	}
+	for _, path := range cached {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("cache entry %q remains: %v", path, err)
+		}
+	}
+	for _, path := range sources {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("clean --cache removed the source %q: %v", path, err)
+		}
+	}
+}
+
+// clean --cache clears caches only: unconfigured install directories are plain
+// clean's job, so they survive even though the picker could list them.
+func TestCleanCacheKeepsUnownedDirectories(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	dataDir := filepath.Join(directory, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.kept]\ninline = \"echo kept\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unowned := filepath.Join(dataDir, "plugins", "obsolete")
+	if err := os.MkdirAll(unowned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	compiled := filepath.Join(unowned, "old.zsh.zwc")
+	if err := os.WriteFile(compiled, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", dataDir)
+
+	var output bytes.Buffer
+	if err := Execute([]string{"clean", "--cache", "--non-interactive"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "removed: plugins/obsolete/old.zsh.zwc\n✓ cleaned: 1 cached paths\n" {
+		t.Fatalf("clean --cache output = %q", output.String())
+	}
+	if _, err := os.Stat(compiled); !os.IsNotExist(err) {
+		t.Fatalf("compiled file remains: %v", err)
+	}
+	if _, err := os.Stat(unowned); err != nil {
+		t.Fatalf("clean --cache pruned an unowned install directory: %v", err)
+	}
+}
+
+func TestCleanCacheReportsNothingToClean(t *testing.T) {
+	directory := t.TempDir()
+	configDir := filepath.Join(directory, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte("shell = \"zsh\"\n\n[plugins.demo]\nlocal = \"plugins/demo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELF_CONFIG_DIR", configDir)
+	t.Setenv("SHELF_CONFIG_FILE", configFile)
+	t.Setenv("SHELF_DATA_DIR", filepath.Join(directory, "data"))
+
+	var output bytes.Buffer
+	if err := Execute([]string{"clean", "--cache"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "✓ nothing to clean\n" {
+		t.Fatalf("clean --cache output = %q", output.String())
+	}
+}
+
+func TestCleanCacheRejectsInteractive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"clean", "--cache", "--interactive"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "clean --cache cannot be used with --interactive") {
+		t.Fatalf("err = %v, want the --cache conflict error", err)
+	}
+}
+
 func TestRemoveInteractiveRemovesSelected(t *testing.T) {
 	directory := t.TempDir()
 	configDir := filepath.Join(directory, "config")
