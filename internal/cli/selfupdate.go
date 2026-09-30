@@ -26,8 +26,9 @@ func newSelfUpdateCommand() *cobra.Command {
 		Long: "self-update downloads a release archive from GitHub, verifies its sha256 against " +
 			"the release's checksums.txt, and replaces the running binary.\n\n" +
 			"--version installs an exact tag, and --yes confirms without a prompt.\n\n" +
-			"Installations managed by a package manager (AUR, deb, rpm, apk) should keep " +
-			"updating through the package manager instead.",
+			"A package manager that owns the install can disable self-update with a marker " +
+			"file, an update-instructions file, or SHELF_SELF_UPDATE_AVAILABLE=false; then " +
+			"shelf refuses to replace the packager's binary. --force overrides the refusal.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			diagnostics := cmd.ErrOrStderr()
@@ -55,7 +56,7 @@ func newSelfUpdateCommand() *cobra.Command {
 	}
 	command.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
 	command.Flags().StringVar(&version, "version", "", "install a specific release tag instead of the newest")
-	command.Flags().BoolVar(&force, "force", false, "update even from a development build or another user's install")
+	command.Flags().BoolVar(&force, "force", false, "update even from a development build, an already-current release, or an install that disables self-update")
 	return command
 }
 

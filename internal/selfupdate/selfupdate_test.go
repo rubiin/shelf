@@ -628,39 +628,218 @@ func TestUpdateYesSkipsTheConfirmation(t *testing.T) {
 	}
 }
 
-func TestOwnerBlocksReplace(t *testing.T) {
+func TestStickyBlocksRename(t *testing.T) {
 	tests := []struct {
-		name    string
-		fileUID uint32
-		euid    uint32
-		want    bool
+		name          string
+		directoryMode os.FileMode
+		directoryUID  uint32
+		fileUID       uint32
+		euid          uint32
+		want          bool
 	}{
-		{name: "own install", fileUID: 1000, euid: 1000},
-		{name: "root replaces anything", fileUID: 0, euid: 0},
-		{name: "root replacing a user install", fileUID: 1000, euid: 0},
-		{name: "package-managed install", fileUID: 0, euid: 1000, want: true},
-		{name: "another user's install", fileUID: 1001, euid: 1000, want: true},
+		{name: "non-sticky directory", directoryMode: 0o777, directoryUID: 0, fileUID: 0, euid: 1000},
+		{name: "sticky, root replaces anything", directoryMode: os.ModeSticky | 0o777, directoryUID: 0, fileUID: 0, euid: 0},
+		{name: "sticky, directory owned by user", directoryMode: os.ModeSticky | 0o777, directoryUID: 1000, fileUID: 0, euid: 1000},
+		{name: "sticky, file owned by user", directoryMode: os.ModeSticky | 0o777, directoryUID: 0, fileUID: 1000, euid: 1000},
+		{name: "sticky foreign binary", directoryMode: os.ModeSticky | 0o777, directoryUID: 0, fileUID: 0, euid: 1000, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ownerBlocksReplace(test.fileUID, test.euid); got != test.want {
-				t.Errorf("ownerBlocksReplace(%d, %d) = %t, want %t", test.fileUID, test.euid, got, test.want)
+			if got := stickyBlocksRename(test.directoryMode, test.directoryUID, test.fileUID, test.euid); got != test.want {
+				t.Errorf("stickyBlocksRename(%v, %d, %d, %d) = %t, want %t", test.directoryMode, test.directoryUID, test.fileUID, test.euid, got, test.want)
 			}
 		})
 	}
 }
 
-func TestCheckInstallOwnerAllowsOurOwnBinary(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "shelf")
+func TestSelfUpdateAvailable(t *testing.T) {
+	tests := []struct {
+		name      string
+		relative  string
+		envKey    string
+		envValue  string
+		available bool
+	}{
+		{name: "plain install", available: true},
+		{name: "lib marker", relative: "lib/.disable-self-update"},
+		{name: "lib shelf marker", relative: "lib/shelf/.disable-self-update"},
+		{name: "lib64 marker", relative: "lib64/shelf/.disable-self-update"},
+		{name: "instructions file", relative: "lib/shelf/shelf-self-update-instructions.toml"},
+		{name: "env re-enables a disabled install", relative: "lib/.disable-self-update", envKey: "SHELF_SELF_UPDATE_AVAILABLE", envValue: "true", available: true},
+		{name: "env disables a plain install", envKey: "SHELF_SELF_UPDATE_AVAILABLE", envValue: "false"},
+		{name: "instructions env disables", envKey: "SHELF_SELF_UPDATE_INSTRUCTIONS", envValue: "missing.toml"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "")
+			t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+			prefix := t.TempDir()
+			if test.relative != "" {
+				path := filepath.Join(prefix, test.relative)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("marker"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.envKey != "" {
+				t.Setenv(test.envKey, test.envValue)
+			}
+			if got := selfUpdateAvailable(prefix); got != test.available {
+				t.Errorf("selfUpdateAvailable = %t, want %t", got, test.available)
+			}
+		})
+	}
+}
+
+func TestInstallPrefix(t *testing.T) {
+	if got := installPrefix("/usr/bin/shelf"); got != "/usr" {
+		t.Errorf("installPrefix(/usr/bin/shelf) = %q, want /usr", got)
+	}
+}
+
+func TestInstructionsMessage(t *testing.T) {
+	directory := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	if got := instructionsMessage(write("message.toml", "message = \"run apt upgrade shelf\"\n")); got != "run apt upgrade shelf" {
+		t.Errorf("message = %q, want the message key", got)
+	}
+	// Named commands are flattened, so the lexicographically first one is used.
+	if got := instructionsMessage(write("commands.toml", "zypper = \"zypper update shelf\"\napt = \"apt upgrade shelf\"\n")); got != "apt upgrade shelf" {
+		t.Errorf("commands = %q, want the first command", got)
+	}
+	if got := instructionsMessage(write("invalid.toml", "not = [unclosed\n")); got != "" {
+		t.Errorf("invalid TOML = %q, want empty", got)
+	}
+	if got := instructionsMessage(write("scalar.toml", "version = 3\n")); got != "" {
+		t.Errorf("non-string values = %q, want empty", got)
+	}
+	if got := instructionsMessage(filepath.Join(directory, "missing.toml")); got != "" {
+		t.Errorf("missing file = %q, want empty", got)
+	}
+}
+
+// packageManagedTarget lays out a fake install prefix with the binary at
+// <prefix>/bin/shelf, so the marker and instructions paths sit under it.
+func packageManagedTarget(t *testing.T) (prefix, target string) {
+	t.Helper()
+	prefix = t.TempDir()
+	target = filepath.Join(prefix, "bin", "shelf")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkInstallOwner(target, false); err != nil {
-		t.Errorf("checkInstallOwner refused our own binary: %v", err)
+	return prefix, target
+}
+
+// writePackagerFile creates a file under the install prefix.
+func writePackagerFile(t *testing.T, prefix, relative, body string) {
+	t.Helper()
+	path := filepath.Join(prefix, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	// A missing target is a fresh install, not someone else's.
-	if err := checkInstallOwner(filepath.Join(t.TempDir(), "missing"), false); err != nil {
-		t.Errorf("checkInstallOwner refused a fresh install: %v", err)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateRefusesAPackageManagedInstall(t *testing.T) {
+	t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "")
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	prefix, target := packageManagedTarget(t)
+	writePackagerFile(t, prefix, "lib/shelf/.disable-self-update", "")
+	server, downloads := newReleaseServer(t, "v2.0.0", nil)
+	pointAPIAt(t, server)
+	var diagnostics bytes.Buffer
+
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true, Diagnostics: &diagnostics}); err == nil {
+		t.Fatal("self-update replaced a package-managed install")
+	} else if !strings.Contains(err.Error(), "installed via a package manager") {
+		t.Errorf("error = %v, want a package-manager refusal", err)
+	}
+	if !strings.Contains(diagnostics.String(), "self-update is disabled for this install") {
+		t.Errorf("diagnostics = %q, want the disabled self-update warning", diagnostics.String())
+	}
+	if *downloads != 0 {
+		t.Errorf("refusal downloaded %d assets, want 0", *downloads)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "old" {
+		t.Errorf("binary changed: %q, %v", contents, err)
+	}
+}
+
+func TestUpdateForceOverridesAPackageManagedInstall(t *testing.T) {
+	t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "")
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	prefix, target := packageManagedTarget(t)
+	writePackagerFile(t, prefix, "lib/shelf/.disable-self-update", "")
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Force: true, Yes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated {
+		t.Fatalf("result = %+v, want --force to update a package-managed install", result)
+	}
+}
+
+func TestUpdateHonoursTheSelfUpdateAvailableOverride(t *testing.T) {
+	prefix, target := packageManagedTarget(t)
+	writePackagerFile(t, prefix, "lib/.disable-self-update", "")
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "true")
+
+	result, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated {
+		t.Fatalf("result = %+v, want the override to allow the update", result)
+	}
+}
+
+func TestUpdatePrintsPackagerInstructions(t *testing.T) {
+	t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "")
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	prefix, target := packageManagedTarget(t)
+	writePackagerFile(t, prefix, "lib/shelf/shelf-self-update-instructions.toml", "message = \"run apt upgrade shelf\"\n")
+	server, _ := newReleaseServer(t, "v2.0.0", nil)
+	pointAPIAt(t, server)
+	var diagnostics bytes.Buffer
+
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true, Diagnostics: &diagnostics}); err == nil {
+		t.Fatal("self-update replaced an install that ships instructions")
+	} else if !strings.Contains(err.Error(), "installed via a package manager") {
+		t.Errorf("error = %v, want a package-manager refusal", err)
+	}
+	if !strings.Contains(diagnostics.String(), "apt upgrade shelf") {
+		t.Errorf("diagnostics = %q, want the packager instructions", diagnostics.String())
 	}
 }
 

@@ -36,6 +36,19 @@ Full command reference, recipes, FAQ, and troubleshooting live in the
 
 ## Installation
 
+### Standalone installer
+
+Install the latest release to `~/.local/bin/shelf`:
+
+```sh
+curl -fsSL https://github.com/rubiin/shelf/releases/latest/download/install.sh | sh
+```
+
+The script downloads the matching release archive, verifies it against the
+release's published sha256, and installs the binary. Set `SHELF_INSTALL_PATH` to
+choose another location and `SHELF_VERSION` to pin a release. Standalone
+installs support `shelf self-update`.
+
 ### Arch Linux
 
 Install the packaged binary from the AUR:
@@ -100,9 +113,21 @@ binary; `--yes` answers for you. A run with no terminal, or with
 move backwards on purpose.
 
 Installations managed by a package manager (AUR, `.deb`, `.rpm`, `.apk`) should
-keep updating through the package manager instead: `self-update` refuses a
-binary owned by another user, and development builds refuse to update at all.
-Pass `--force` to override both.
+keep updating through the package manager instead. A packager disables
+self-update by installing a marker file, by shipping update instructions, or by
+setting `SHELF_SELF_UPDATE_AVAILABLE=false`; `self-update` then refuses and prints
+the instructions when they exist. Development builds refuse to update at all.
+Pass `--force` to override.
+
+The marker file is looked up under the install prefix (the directory two levels
+above the binary, e.g. `/usr` for `/usr/bin/shelf`) at
+`lib/.disable-self-update`, `lib/shelf/.disable-self-update`, or
+`lib64/shelf/.disable-self-update`. Update instructions live at
+`lib/shelf-self-update-instructions.toml`,
+`lib/shelf/shelf-self-update-instructions.toml`, or
+`lib64/shelf/shelf-self-update-instructions.toml` and hold a `message` key (or
+per-package-manager command values). `SHELF_SELF_UPDATE_INSTRUCTIONS` overrides
+the search.
 
 ## Getting started
 

@@ -3817,3 +3817,103 @@ func TestCommandsRejectAConfigFileAsDirectory(t *testing.T) {
 		t.Fatalf("list err = %v, want a not-a-directory error", err)
 	}
 }
+
+// buildShelfBinary compiles the real shelf binary at destination, so a test can
+// run it from a fake install prefix and observe os.Executable(). Slow on the
+// first run, cached by the Go build cache afterwards.
+func buildShelfBinary(t *testing.T, destination string) {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain is not available")
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("go", "build", "-o", destination, "shelf/cmd/shelf")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build shelf: %v\n%s", err, output)
+	}
+}
+
+// runSelfUpdate runs a built shelf binary with isolated config and data dirs and
+// a dead proxy, so an unexpected network attempt fails immediately.
+func runSelfUpdate(t *testing.T, binary string, env []string, args ...string) (string, error) {
+	t.Helper()
+	command := exec.CommandContext(context.Background(), binary, args...)
+	command.Env = append(append(os.Environ(),
+		"SHELF_CONFIG_DIR="+filepath.Join(t.TempDir(), "config"),
+		"SHELF_DATA_DIR="+filepath.Join(t.TempDir(), "data"),
+		"HTTPS_PROXY=http://127.0.0.1:9",
+	), env...)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	err := command.Run()
+	return stderr.String(), err
+}
+
+// writeInstallFile creates a file under an install prefix.
+func writeInstallFile(t *testing.T, prefix, relative, body string) {
+	t.Helper()
+	path := filepath.Join(prefix, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSelfUpdateBinaryRefusesAPackageManagedInstall(t *testing.T) {
+	t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "")
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	prefix := t.TempDir()
+	installed := filepath.Join(prefix, "bin", "shelf")
+	buildShelfBinary(t, installed)
+	writeInstallFile(t, prefix, "lib/shelf/.disable-self-update", "")
+
+	stderr, err := runSelfUpdate(t, installed, nil, "self-update", "--yes")
+	if err == nil {
+		t.Fatal("self-update replaced a package-managed install")
+	}
+	if !strings.Contains(stderr, "installed via a package manager") {
+		t.Errorf("stderr = %q, want a package-manager refusal", stderr)
+	}
+	if !strings.Contains(stderr, "self-update is disabled for this install") {
+		t.Errorf("stderr = %q, want the disabled self-update warning", stderr)
+	}
+}
+
+func TestSelfUpdateBinaryPrintsPackagerInstructions(t *testing.T) {
+	t.Setenv("SHELF_SELF_UPDATE_AVAILABLE", "")
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	prefix := t.TempDir()
+	installed := filepath.Join(prefix, "bin", "shelf")
+	buildShelfBinary(t, installed)
+	writeInstallFile(t, prefix, "lib/shelf/shelf-self-update-instructions.toml", "message = \"run apt upgrade shelf\"\n")
+
+	stderr, err := runSelfUpdate(t, installed, nil, "self-update", "--yes")
+	if err == nil {
+		t.Fatal("self-update replaced an install that ships instructions")
+	}
+	if !strings.Contains(stderr, "installed via a package manager") {
+		t.Errorf("stderr = %q, want a package-manager refusal", stderr)
+	}
+	if !strings.Contains(stderr, "run apt upgrade shelf") {
+		t.Errorf("stderr = %q, want the packager instructions", stderr)
+	}
+}
+
+func TestSelfUpdateBinaryHonoursTheDisableOverride(t *testing.T) {
+	t.Setenv("SHELF_SELF_UPDATE_INSTRUCTIONS", "")
+	prefix := t.TempDir()
+	installed := filepath.Join(prefix, "bin", "shelf")
+	buildShelfBinary(t, installed)
+
+	stderr, err := runSelfUpdate(t, installed, []string{"SHELF_SELF_UPDATE_AVAILABLE=false"}, "self-update", "--yes")
+	if err == nil {
+		t.Fatal("self-update ignored SHELF_SELF_UPDATE_AVAILABLE=false")
+	}
+	if !strings.Contains(stderr, "installed via a package manager") {
+		t.Errorf("stderr = %q, want a package-manager refusal", stderr)
+	}
+}

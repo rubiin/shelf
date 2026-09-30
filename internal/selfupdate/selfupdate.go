@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -34,8 +35,8 @@ type Options struct {
 	Version string
 	// Target defaults to the running executable.
 	Target string
-	// Force updates a development build, an install owned by another user, and
-	// a release equal to the running version.
+	// Force updates a development build, an install that disables self-update,
+	// and a release equal to the running version.
 	Force bool
 	// Confirm approves the release before the binary is replaced. A nil Confirm
 	// refuses unless Yes is set, so a caller that cannot prompt must opt in.
@@ -106,11 +107,15 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		return Result{}, fmt.Errorf("resolve the running binary: %w", err)
 	}
 	options.Target = resolved
+	// A package manager that owns the install turns self-update off explicitly,
+	// so a package-managed binary is not replaced behind the packager's back.
+	prefix := installPrefix(options.Target)
+	if !options.Force && !selfUpdateAvailable(prefix) {
+		logf(options.Diagnostics, "%s", selfUpdateDisabledMessage(prefix))
+		return Result{}, errors.New("shelf is installed via a package manager, cannot update")
+	}
 	if !options.Force && (options.CurrentVersion == "" || options.CurrentVersion == "dev") {
 		return Result{}, fmt.Errorf("self-update refused: this is a development build (%q); install a release or pass --force", displayVersion(options.CurrentVersion))
-	}
-	if err := checkInstallOwner(options.Target, options.Force); err != nil {
-		return Result{}, err
 	}
 	latest, err := selectRelease(ctx, options)
 	if err != nil {
@@ -135,7 +140,7 @@ func Update(ctx context.Context, options Options) (Result, error) {
 	}
 	// Probe before prompting: an install that cannot be replaced should say so
 	// rather than ask for a confirmation it cannot act on.
-	if err := checkWritable(options.Target); err != nil {
+	if err := checkReplaceable(options.Target, prefix); err != nil {
 		return Result{}, err
 	}
 	if err := confirmUpdate(options, next); err != nil {
@@ -291,36 +296,6 @@ func atRequestedVersion(options Options, tag string) bool {
 		return strings.TrimPrefix(options.CurrentVersion, "v") == strings.TrimPrefix(tag, "v")
 	}
 	return alreadyCurrent(options.CurrentVersion, tag)
-}
-
-// checkInstallOwner refuses to replace a binary owned by another user, which is
-// what a package-managed install looks like from here: /usr/bin/shelf belongs to
-// root, and renaming it needs privileges this user does not have.
-func checkInstallOwner(target string, force bool) error {
-	info, err := os.Stat(target)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("stat %s: %w", target, err)
-	}
-	// Force is the documented escape hatch.
-	if force {
-		return nil
-	}
-	owner, ok := fileOwner(info)
-	if !ok || !ownerBlocksReplace(owner, uint32(os.Geteuid())) {
-		return nil
-	}
-	return fmt.Errorf("self-update refused: %s is owned by another user, so only its owner can replace it; re-run with elevated privileges, or update shelf the same way it was installed", target)
-}
-
-// ownerBlocksReplace reports whether a binary owned by fileUID can be replaced
-// by a user with euid. Root replaces anything; otherwise only the file's owner
-// can rename it out of the way. Taking the ids as arguments keeps the rule
-// testable without a second user to own the file.
-func ownerBlocksReplace(fileUID, euid uint32) bool {
-	return euid != 0 && fileUID != euid
 }
 
 // fileOwner reports the uid owning a file.
@@ -537,18 +512,71 @@ func resolveTarget(target string) (string, error) {
 	return resolveTarget(link)
 }
 
-// checkWritable fails fast, before the download, so a package-managed install
-// gets an actionable error instead of a bare permission-denied.
-func checkWritable(target string) error {
+// checkReplaceable fails fast, before the download, so an install this user
+// cannot replace gets an actionable error instead of a bare permission-denied.
+func checkReplaceable(target, prefix string) error {
 	directory := filepath.Dir(target)
-	temporary, err := os.CreateTemp(directory, ".shelf-update-*")
-	if err != nil {
-		return fmt.Errorf("self-update refused: cannot install next to %s because %s is not writable; install shelf in a user-writable directory (like ~/.local/bin) or update through your package manager: %w", target, directory, err)
+	if err := probeInstallDir(directory); err != nil {
+		if !writeProbeIsFatal(err) {
+			// Anything but a permission failure is left to the real operation,
+			// which reports it with the path it actually tried.
+			return nil
+		}
+		return replaceError(target, directory, prefix, false)
 	}
-	name := temporary.Name()
-	_ = temporary.Close()
-	_ = os.Remove(name)
+	if stickyBlocksReplacing(directory, target) {
+		return replaceError(target, directory, prefix, true)
+	}
 	return nil
+}
+
+// probeInstallDir creates and removes a file in the target's directory, the way
+// replacing the binary is about to.
+func probeInstallDir(directory string) error {
+	file, err := os.CreateTemp(directory, ".shelf-update-probe-*")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Remove(name)
+}
+
+// writeProbeIsFatal reports whether a failed write probe means the update cannot
+// proceed: only "this user cannot write here" stops it.
+func writeProbeIsFatal(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS)
+}
+
+// stickyBlocksReplacing reports whether a sticky directory holds a binary owned
+// by someone else. Creating a probe file is allowed there, but renaming the
+// existing binary out of the way is restricted to its owner and root.
+func stickyBlocksReplacing(directory, target string) bool {
+	directoryInfo, err := os.Stat(directory)
+	if err != nil {
+		return false
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	directoryOwner, ok := fileOwner(directoryInfo)
+	if !ok {
+		return false
+	}
+	fileOwnerID, ok := fileOwner(targetInfo)
+	if !ok {
+		return false
+	}
+	return stickyBlocksRename(directoryInfo.Mode(), directoryOwner, fileOwnerID, uint32(os.Geteuid()))
+}
+
+// stickyBlocksRename applies the sticky-bit rule; taking the ids as arguments
+// keeps it testable without a second user to own the file.
+func stickyBlocksRename(directoryMode os.FileMode, directoryUID, fileUID, euid uint32) bool {
+	return directoryMode&os.ModeSticky != 0 && euid != 0 && directoryUID != euid && fileUID != euid
 }
 
 // createTemp opens the staging file for an install. A var so tests can inject

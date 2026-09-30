@@ -50,6 +50,8 @@ aurs:
       install -Dm755 "./shelf" "${pkgdir}/usr/bin/shelf"
       # license
       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/shelf/LICENSE"
+      # disable self-update: the package manager owns this install
+      install -Dm644 "/dev/null" "${pkgdir}/usr/lib/shelf/.disable-self-update"
       # completions (generated at package time from the shipped binary)
       ./shelf completion bash > shelf.bash
       ./shelf completion zsh > _shelf
@@ -74,6 +76,9 @@ nfpms:
     contents:
       - src: ./LICENSE
         dst: /usr/share/licenses/shelf/LICENSE
+      # Disable self-update: the package manager owns this install.
+      - src: ./packaging/disable-self-update
+        dst: /usr/lib/shelf/.disable-self-update
 
 changelog:
   sort: desc
@@ -91,6 +96,10 @@ changelog:
 
 
 release:
+  # Publish the installer as a release asset, so the stable one-liner URL is
+  # https://github.com/rubiin/shelf/releases/latest/download/install.sh
+  extra_files:
+    - glob: install.sh
   footer: >-
 
     ---
