@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -60,6 +61,9 @@ func decode(contents []byte) (Config, error) {
 func Validate(cfg Config) error {
 	if cfg.Shell != "" && cfg.Shell != Bash && cfg.Shell != Zsh {
 		return fmt.Errorf("unsupported shell: %q", cfg.Shell)
+	}
+	if cfg.Color != "" && !slices.Contains(Colors, cfg.Color) {
+		return fmt.Errorf("unsupported color %q (use auto, always, or never)", cfg.Color)
 	}
 	for name := range cfg.Env {
 		if !validEnvironmentName(name) {

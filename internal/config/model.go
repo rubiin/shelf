@@ -1,14 +1,23 @@
 package config
 
 type Config struct {
-	Shell       Shell                `toml:"shell"`
-	Matches     []string             `toml:"match"`
-	Apply       []string             `toml:"apply"`
-	Env         map[string]string    `toml:"env"`
-	Templates   map[string]string    `toml:"templates"`
-	Plugins     map[string]RawPlugin `toml:"plugins"`
-	PluginOrder []string             `toml:"-"`
+	Shell   Shell  `toml:"shell"`
+	Profile string `toml:"profile"`
+	Color   string `toml:"color"`
+	Quiet   *bool  `toml:"quiet"`
+	Verbose *bool  `toml:"verbose"`
+	// NonInteractive mirrors the --non-interactive flag; a pointer distinguishes absent from false.
+	NonInteractive *bool                `toml:"non_interactive"`
+	Matches        []string             `toml:"match"`
+	Apply          []string             `toml:"apply"`
+	Env            map[string]string    `toml:"env"`
+	Templates      map[string]string    `toml:"templates"`
+	Plugins        map[string]RawPlugin `toml:"plugins"`
+	PluginOrder    []string             `toml:"-"`
 }
+
+// Colors are the accepted values of the color option and the --color flag.
+var Colors = []string{"auto", "always", "never"}
 
 type RawPlugin struct {
 	GitHub    string   `toml:"github"`

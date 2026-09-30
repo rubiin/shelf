@@ -68,8 +68,12 @@ func NewRoot() *cobra.Command {
 		Short:         "Modern, fast, configurable shell plugin manager for both bash and zsh",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(*cobra.Command, []string) error {
-			return validateBoolEnvironment()
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validateBoolEnvironment(); err != nil {
+				return err
+			}
+			loadConfigDefaults(cmd)
+			return nil
 		},
 	}
 	command.SetOut(os.Stdout)
@@ -1640,6 +1644,42 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 // writeError prints a blank line, then the error prefix.
 func writeError(diagnostics io.Writer, err error) {
 	_, _ = fmt.Fprintf(diagnostics, "\n%s %s\n", writerColors(diagnostics).error("error:"), err)
+}
+
+// loadConfigDefaults applies global options from config.toml before a command runs.
+// A missing or invalid config is ignored here so the command reports it itself.
+func loadConfigDefaults(cmd *cobra.Command) {
+	paths, err := resolvePaths()
+	if err != nil {
+		return
+	}
+	cfg, err := config.Load(paths.ConfigFile)
+	if err != nil {
+		return
+	}
+	applyConfigDefaults(cmd, cfg)
+}
+
+// applyConfigDefaults seeds the global options from the config. An explicitly set
+// flag wins; otherwise the config value overrides the SHELF_* default, matching
+// how the config shell overrides SHELF_SHELL.
+func applyConfigDefaults(cmd *cobra.Command, cfg config.Config) {
+	flags := cmd.Flags()
+	if cfg.Color != "" && !flags.Changed("color") {
+		color = cfg.Color
+	}
+	if cfg.Profile != "" && !flags.Changed("profile") {
+		profile = cfg.Profile
+	}
+	if cfg.Quiet != nil && !flags.Changed("quiet") {
+		quiet = *cfg.Quiet
+	}
+	if cfg.Verbose != nil && !flags.Changed("verbose") {
+		verbose = *cfg.Verbose
+	}
+	if cfg.NonInteractive != nil && !flags.Changed("non-interactive") {
+		nonInteractive = *cfg.NonInteractive
+	}
 }
 
 // RuntimeContext reports resolved settings to non-Cobra callers.

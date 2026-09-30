@@ -272,6 +272,9 @@ Global options:
 --profile PROFILE
 ```
 
+Besides `shell`, the `profile`, `color`, `quiet`, `verbose`, and `non_interactive`
+options can also be set in `config.toml`; see [Configuration](#configuration).
+
 Their environment equivalents use the
 `SHELF_` prefix:
 
@@ -295,8 +298,36 @@ an error rather than a silent fallback.
 
 ## Configuration
 
-`config.toml` has one top-level configuration and one source per plugin. Set
-`shell = "zsh"` or `shell = "bash"`; omit it to use the default Zsh shell.
+`config.toml` has one top-level configuration and one source per plugin.
+
+Top-level keys set defaults for the whole run:
+
+| Key | Meaning |
+| --- | --- |
+| `shell` | `"bash"` or `"zsh"`; omit for the default Zsh |
+| `profile` | profile to use, like `--profile` / `SHELF_PROFILE` |
+| `color` | `"auto"`, `"always"`, or `"never"` |
+| `quiet` | `true` suppresses diagnostics |
+| `verbose` | `true` enables verbose diagnostics |
+| `non_interactive` | `true` disables interactive prompts |
+| `match` | default file globs for plugins without `use` |
+| `apply` | default apply templates for plugins without `apply` |
+| `env` | environment variables rendered before every plugin |
+| `templates` | custom apply templates |
+| `plugins` | the plugin sources themselves |
+
+A global option resolves in this order: an explicitly set flag wins, otherwise
+the `config.toml` value, otherwise the matching `SHELF_*` environment variable,
+otherwise the built-in default. This matches `shell`, where the config value
+also overrides `SHELF_SHELL`. `--config-dir`, `--data-dir`, and `--config-file`
+select the config itself and have no in-config equivalent.
+
+```toml
+shell = "zsh"
+profile = "work"
+color = "never"
+quiet = true
+```
 
 Each plugin must set exactly one of `github`, `gist`, `gitlab`, `bitbucket`,
 `codeberg`, `git`, `remote`, `local`, or `inline`:
