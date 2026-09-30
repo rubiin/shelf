@@ -14,6 +14,7 @@
 <p align="center">
   <a href="https://github.com/rubiin/shelf/blob/master/LICENSE"><img alt="License" src="https://img.shields.io/github/license/rubiin/shelf" /></a>
   <a href="https://github.com/rubiin/shelf/actions"><img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/rubiin/shelf/ci.yml"></a>
+  <a href="https://codecov.io/gh/rubiin/shelf"><img alt="Coverage" src="https://img.shields.io/codecov/c/github/rubiin/shelf"></a>
   <a href="https://aur.archlinux.org/packages/shelf-sh-bin"><img alt="AUR Version" src="https://img.shields.io/aur/version/shelf-sh-bin"></a>
 </p>
 
