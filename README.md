@@ -66,6 +66,11 @@ systems. Download the matching `.deb`, `.rpm`, or `.apk` file from the
 [latest release](https://github.com/rubiin/shelf/releases/latest), then install
 it with your distribution's package manager.
 
+These packages install a `.disable-self-update` marker, so `shelf self-update`
+warns and refuses: update shelf through the package manager instead. The
+[standalone installer](#standalone-installer) has no marker and supports
+`self-update`.
+
 ### Prebuilt archives
 
 Linux and macOS tarballs are available on the [releases
@@ -92,7 +97,8 @@ go build -trimpath -buildvcs=false -ldflags "-s -w" -o shelf ./cmd/shelf
 
 ### Updating
 
-Release installs can update themselves:
+Standalone installs from `install.sh` (in `~/.local/bin/shelf`) can update
+themselves:
 
 ```sh
 shelf self-update

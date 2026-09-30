@@ -79,19 +79,21 @@ func installPrefix(target string) string {
 	return filepath.Dir(filepath.Dir(resolved))
 }
 
-// selfUpdateDisabledHint is shown when self-update is disabled and the packager
-// shipped no instructions; being unable to self-update is not by itself proof a
-// package manager owns the install.
-const selfUpdateDisabledHint = "self-update is disabled for this install, update shelf the same way you installed it"
+// installerCommand is the standalone install one-liner, shown when self-update
+// is disabled and the packager shipped no instructions.
+const installerCommand = "curl -fsSL https://github.com/rubiin/shelf/releases/latest/download/install.sh | sh"
 
 // selfUpdateDisabledMessage explains how to update when self-update is
-// unavailable: the packager's instructions when it shipped some, otherwise the
-// neutral hint.
+// unavailable: the packager's instructions when it shipped some, otherwise how
+// to install a self-updating copy. Being unable to self-update is not by itself
+// proof that a package manager owns the install.
 func selfUpdateDisabledMessage(prefix string) string {
 	if instructions := instructionsMessage(instructionsFile(prefix)); instructions != "" {
 		return instructions
 	}
-	return selfUpdateDisabledHint
+	return "self-update is disabled for this install.\n" +
+		"Update shelf the same way you installed it, or reinstall it with the standalone installer:\n" +
+		"  " + installerCommand
 }
 
 // instructionsMessage reads a packager's TOML instructions: the message key, or
