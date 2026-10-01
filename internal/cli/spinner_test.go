@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yarlson/pin"
-
 	"shelf/internal/selfupdate"
 )
 
@@ -47,8 +45,8 @@ func TestProgressSpinnerIsSilentWithoutATerminal(t *testing.T) {
 // On a terminal a phase is animated instead of logged, so it is not written
 // twice.
 func TestSelfUpdateAnimatesPhasesOnATerminal(t *testing.T) {
-	pin.SetForceInteractive(true)
-	t.Cleanup(func() { pin.SetForceInteractive(false) })
+	forceSpinner.Store(true)
+	t.Cleanup(func() { forceSpinner.Store(false) })
 
 	original := runUpdate
 	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
@@ -104,8 +102,8 @@ func TestProgressSpinnerIgnoresNilDiagnostics(t *testing.T) {
 // calls through the terminal gate.
 func animatingProgress(t *testing.T, output io.Writer, message string) *progress {
 	t.Helper()
-	pin.SetForceInteractive(true)
-	t.Cleanup(func() { pin.SetForceInteractive(false) })
+	forceSpinner.Store(true)
+	t.Cleanup(func() { forceSpinner.Store(false) })
 	shown := newProgress(output)
 	shown.animate(message)
 	return shown
@@ -122,7 +120,8 @@ func TestProgressSpinnerAnimatesAndClears(t *testing.T) {
 	if !strings.Contains(text, "Installing plugins") {
 		t.Fatalf("spinner never wrote a frame: %q", text)
 	}
-	if !strings.HasSuffix(text, "\r\033[K") {
+	// The frame is cleared and its line ended, so later output starts fresh.
+	if !strings.HasSuffix(text, "\r\033[K\n") {
 		t.Fatalf("spinner did not clear its line: %q", text)
 	}
 }
@@ -136,7 +135,7 @@ func TestProgressSpinnerColorsWhenEnabled(t *testing.T) {
 	shown := animatingProgress(t, &output, "Installing plugins")
 	time.Sleep(150 * time.Millisecond)
 	shown.Stop()
-	if !strings.Contains(output.String(), pin.ColorCyan.String()) {
+	if !strings.Contains(output.String(), ansiSpinnerColor) {
 		t.Fatalf("colored spinner emitted no color: %q", output.String())
 	}
 
@@ -145,7 +144,7 @@ func TestProgressSpinnerColorsWhenEnabled(t *testing.T) {
 	shown = animatingProgress(t, &output, "Installing plugins")
 	time.Sleep(150 * time.Millisecond)
 	shown.Stop()
-	if strings.Contains(output.String(), pin.ColorCyan.String()) {
+	if strings.Contains(output.String(), ansiSpinnerColor) {
 		t.Fatalf("colorless spinner emitted color: %q", output.String())
 	}
 }
@@ -182,8 +181,8 @@ func TestProgressWriteClosesAnUnterminatedLine(t *testing.T) {
 // A phase is shown only when it is announced, so nothing animates before the
 // work behind it starts.
 func TestProgressDoesNotAnimateBeforeShow(t *testing.T) {
-	pin.SetForceInteractive(true)
-	t.Cleanup(func() { pin.SetForceInteractive(false) })
+	forceSpinner.Store(true)
+	t.Cleanup(func() { forceSpinner.Store(false) })
 
 	var output bytes.Buffer
 	shown := newProgress(&output)
@@ -220,8 +219,8 @@ func TestProgressShowStartsOnATerminalOnly(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			quiet, verbose = test.quiet, test.verbose
 			var output bytes.Buffer
-			pin.SetForceInteractive(test.want)
-			t.Cleanup(func() { pin.SetForceInteractive(false) })
+			forceSpinner.Store(test.want)
+			t.Cleanup(func() { forceSpinner.Store(false) })
 
 			shown := newProgress(&output)
 			shown.Show("Downloading shelf")
@@ -230,6 +229,18 @@ func TestProgressShowStartsOnATerminalOnly(t *testing.T) {
 			}
 			shown.Stop()
 		})
+	}
+}
+
+// Stopping must end the spinner's line, so what prints next cannot continue
+// the frame's line.
+func TestProgressStopEndsTheSpinnerLine(t *testing.T) {
+	var output bytes.Buffer
+	shown := animatingProgress(t, &output, "Downloading shelf")
+	time.Sleep(150 * time.Millisecond)
+	shown.Stop()
+	if !strings.HasSuffix(output.String(), "\r\033[K\n") {
+		t.Fatalf("stop left the line dirty: %q", output.String())
 	}
 }
 
@@ -261,7 +272,7 @@ func TestProgressHideAndShowAgain(t *testing.T) {
 	shown := animatingProgress(t, &output, "Downloading shelf")
 	time.Sleep(150 * time.Millisecond)
 	shown.Hide()
-	if !strings.HasSuffix(output.String(), "\r\033[K") {
+	if !strings.HasSuffix(output.String(), "\r\033[K\n") {
 		t.Fatalf("hide left the line dirty: %q", output.String())
 	}
 
@@ -277,14 +288,16 @@ func TestProgressHideAndShowAgain(t *testing.T) {
 // whether it hits the text itself or the newline that closes an unterminated
 // line.
 func TestProgressWritePropagatesAnError(t *testing.T) {
+	// The first write is the opening frame, so the sequence under test starts
+	// at the second.
 	tests := []struct {
 		name   string
 		failAt int
 		data   string
 	}{
-		{name: "clear line", failAt: 1, data: "Selected shelf 1.0.0\n"},
-		{name: "text", failAt: 2, data: "Selected shelf 1.0.0\n"},
-		{name: "closing newline", failAt: 3, data: "partial"},
+		{name: "clear line", failAt: 2, data: "Selected shelf 1.0.0\n"},
+		{name: "text", failAt: 3, data: "Selected shelf 1.0.0\n"},
+		{name: "closing newline", failAt: 4, data: "partial"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
