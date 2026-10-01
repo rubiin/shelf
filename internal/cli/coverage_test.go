@@ -34,11 +34,17 @@ func TestSelfUpdateCommandInvokesConfirm(t *testing.T) {
 	}
 	t.Cleanup(func() { runUpdate = original })
 
-	if err := Execute([]string{"self-update"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+	var diagnostics bytes.Buffer
+	if err := Execute([]string{"self-update"}, &bytes.Buffer{}, &diagnostics); err != nil {
 		t.Fatal(err)
 	}
 	if !invoked {
 		t.Fatal("self-update did not call the confirmation hook")
+	}
+	// The spinner is silent off a terminal, so pausing it around the prompt
+	// leaves stderr byte-identical.
+	if diagnostics.Len() != 0 {
+		t.Fatalf("self-update wrote spinner output to a non-terminal: %q", diagnostics.String())
 	}
 }
 

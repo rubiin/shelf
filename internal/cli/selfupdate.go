@@ -35,14 +35,22 @@ func newSelfUpdateCommand() *cobra.Command {
 			if quiet {
 				diagnostics = nil
 			}
+			stop := startProgressSpinner(diagnostics, "Downloading shelf")
 			result, err := runUpdate(cmd.Context(), selfupdate.Options{
 				CurrentVersion: Version,
 				Version:        version,
 				Force:          force,
 				Yes:            yes,
-				Confirm:        func(version string) (bool, error) { return confirmSelfUpdate(cmd, version) },
-				Diagnostics:    styledLines(diagnostics, ansiStatusColor),
+				Confirm: func(version string) (bool, error) {
+					// The prompt needs the terminal to itself, so pause the spinner.
+					stop()
+					approved, confirmErr := confirmSelfUpdate(cmd, version)
+					stop = startProgressSpinner(diagnostics, "Downloading shelf")
+					return approved, confirmErr
+				},
+				Diagnostics: styledLines(diagnostics, ansiStatusColor),
 			})
+			stop()
 			if err != nil {
 				return err
 			}

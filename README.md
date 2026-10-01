@@ -538,6 +538,12 @@ Diagnostics go to stderr: `Loaded` and `Locked` headers, right-aligned
 `Checked`, `Frozen`, and `Skipped` statuses, and `Unlocked`, `Rendered`, `Inlined`, and `Removed` when `--verbose` is set. A failed command prints `error:` and exits
 with status 2.
 
+While an interactive terminal is attached, `lock`, `source`, `update`, and
+`self-update` show a progress spinner on stderr during their network-heavy
+phases. The spinner is omitted for piped output and under `--quiet` and
+`--verbose`, so shell output and raw diagnostics stay unchanged. `self-update`
+pauses the spinner while it asks for confirmation.
+
 ## Examples
 
 Update plugin sources, write the refreshed lockfile, and print shell code:
