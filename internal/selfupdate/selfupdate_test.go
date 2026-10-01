@@ -1379,7 +1379,8 @@ func TestExtractBinarySurfacesAReadError(t *testing.T) {
 
 // TestInstallBinarySurfacesAWriteError covers a staging file that cannot take
 // the new binary; the write must be reported instead of silently renamed over
-// the target.
+// the target. A closed staging file also fails Chmod and Sync, so each of those
+// steps must close it and report rather than leak the descriptor.
 func TestInstallBinarySurfacesAWriteError(t *testing.T) {
 	original := createTemp
 	createTemp = func(directory, pattern string) (*os.File, error) {

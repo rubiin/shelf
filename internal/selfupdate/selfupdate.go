@@ -74,8 +74,9 @@ type release struct {
 	Assets  []asset `json:"assets"`
 }
 
-// archiveName mirrors the name_template in .goreleaser.yaml.
-func archiveName(goos, goarch string) (string, error) {
+// archiveName mirrors the name_template in .goreleaser.yaml. A var so a test can
+// pose as a platform with no published asset.
+var archiveName = func(goos, goarch string) (string, error) {
 	switch goos {
 	case "linux", "darwin":
 	default:

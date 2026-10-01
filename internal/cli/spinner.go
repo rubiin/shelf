@@ -11,9 +11,10 @@ import (
 
 // spinnerEnabled reports whether a progress spinner should animate on writer:
 // only an interactive terminal, and never under --quiet or --verbose, so shell
-// pipelines and raw diagnostics stay intact.
+// pipelines and raw diagnostics stay intact. It defers to pin's own force flag
+// so an integration, or a test, can drive the animation deliberately.
 func spinnerEnabled(writer io.Writer) bool {
-	return !quiet && !verbose && writer != nil && isTerminal(writer)
+	return !quiet && !verbose && writer != nil && (pin.ForceInteractive() || isTerminal(writer))
 }
 
 // progress is an optional animation plus the writer other output must go

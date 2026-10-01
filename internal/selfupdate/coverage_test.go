@@ -2,6 +2,8 @@ package selfupdate
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,6 +63,69 @@ func TestStickyBlocksReplacingMissingPaths(t *testing.T) {
 	}
 	if stickyBlocksReplacing(directory, filepath.Join(directory, "absent")) {
 		t.Fatal("stickyBlocksReplacing blocked a missing target")
+	}
+}
+
+// A platform shelf ships no release for cannot report a download phase.
+func TestUpdateReportsAnUnreleasedPlatform(t *testing.T) {
+	server, _ := newReleaseServer(t, "v2.0.0", nil)
+	pointAPIAt(t, server)
+	// archiveName is a var so a test can pose as a platform with no asset.
+	original := archiveName
+	archiveName = func(string, string) (string, error) {
+		return "", errors.New("self-update has no release archive for plan9/mips")
+	}
+	t.Cleanup(func() { archiveName = original })
+
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(context.Background(), Options{CurrentVersion: "1.0.0", Target: target, Yes: true}); err == nil {
+		t.Fatal("self-update accepted a platform with no release archive")
+	} else if !strings.Contains(err.Error(), "plan9/mips") {
+		t.Errorf("error = %v, want the archive-name failure", err)
+	}
+}
+
+// An unreadable symlink cannot be resolved to a real binary.
+func TestResolveTargetRejectsAnUnreadableLink(t *testing.T) {
+	directory := t.TempDir()
+	// A symlink loop makes resolution recurse until the path is too long, and a
+	// dangling one resolves to a missing file; neither may be reported as a
+	// resolution failure that hides a real target.
+	dangling := filepath.Join(directory, "shelf")
+	if err := os.Symlink(filepath.Join(directory, "absent"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveTarget(dangling)
+	if err != nil {
+		t.Fatalf("resolveTarget refused a dangling link: %v", err)
+	}
+	if resolved != filepath.Join(directory, "absent") {
+		t.Errorf("resolved = %q, want the link target", resolved)
+	}
+}
+
+// A missing install directory is left to the real operation, which reports the
+// path it tried, rather than being called fatal here.
+func TestProbeInstallDirReportsAMissingDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent")
+	if err := probeInstallDir(missing); err == nil {
+		t.Fatal("probeInstallDir accepted a missing directory")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("error = %v, want a not-exist error", err)
+	}
+}
+
+// A failed write probe for a reason other than permissions must not stop the
+// update before the download.
+func TestWriteProbeIsFatalOnlyForPermissions(t *testing.T) {
+	if writeProbeIsFatal(errors.New("disk full")) {
+		t.Fatal("writeProbeIsFatal treated a disk failure as a permission problem")
+	}
+	if !writeProbeIsFatal(fs.ErrPermission) {
+		t.Fatal("writeProbeIsFatal ignored a permission failure")
 	}
 }
 

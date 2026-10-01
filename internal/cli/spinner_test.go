@@ -2,11 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/yarlson/pin"
+
+	"shelf/internal/selfupdate"
 )
 
 // The spinner must stay out of the way whenever diagnostics is not an
@@ -35,6 +41,32 @@ func TestProgressSpinnerIsSilentWithoutATerminal(t *testing.T) {
 				t.Fatalf("spinner wrote to a non-terminal: %q", test.diagnostics)
 			}
 		})
+	}
+}
+
+// On a terminal a phase is animated instead of logged, so it is not written
+// twice.
+func TestSelfUpdateAnimatesPhasesOnATerminal(t *testing.T) {
+	pin.SetForceInteractive(true)
+	t.Cleanup(func() { pin.SetForceInteractive(false) })
+
+	original := runUpdate
+	runUpdate = func(_ context.Context, options selfupdate.Options) (selfupdate.Result, error) {
+		if options.Progress == nil {
+			t.Error("self-update got no progress hook on a terminal")
+		} else {
+			options.Progress("Downloading shelf")
+		}
+		if options.Diagnostics == nil {
+			t.Error("self-update ran without diagnostics")
+		}
+		return selfupdate.Result{Updated: false, Next: "9.9.9"}, nil
+	}
+	t.Cleanup(func() { runUpdate = original })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"self-update"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -70,7 +102,7 @@ func TestProgressSpinnerIgnoresNilDiagnostics(t *testing.T) {
 
 // animatingProgress starts a progress over a buffer and lets a test's Show
 // calls through the terminal gate.
-func animatingProgress(t *testing.T, output *bytes.Buffer, message string) *progress {
+func animatingProgress(t *testing.T, output io.Writer, message string) *progress {
 	t.Helper()
 	pin.SetForceInteractive(true)
 	t.Cleanup(func() { pin.SetForceInteractive(false) })
@@ -167,6 +199,62 @@ func TestProgressDoesNotAnimateBeforeShow(t *testing.T) {
 	}
 }
 
+// Show is the gated entry point a caller uses, so it must start the animation
+// on a terminal and stay silent off one.
+func TestProgressShowStartsOnATerminalOnly(t *testing.T) {
+	tests := []struct {
+		name    string
+		quiet   bool
+		verbose bool
+		want    bool
+	}{
+		{name: "buffer output"},
+		{name: "quiet", quiet: true},
+		{name: "verbose", verbose: true},
+		{name: "terminal", want: true},
+	}
+	originalQuiet, originalVerbose := quiet, verbose
+	t.Cleanup(func() { quiet, verbose = originalQuiet, originalVerbose })
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			quiet, verbose = test.quiet, test.verbose
+			var output bytes.Buffer
+			pin.SetForceInteractive(test.want)
+			t.Cleanup(func() { pin.SetForceInteractive(false) })
+
+			shown := newProgress(&output)
+			shown.Show("Downloading shelf")
+			if shown.running != test.want {
+				t.Fatalf("running = %t, want %t", shown.running, test.want)
+			}
+			shown.Stop()
+		})
+	}
+}
+
+// A second phase while the first is still running relabels the frame instead
+// of restarting it.
+func TestProgressShowRelabelsARunningSpinner(t *testing.T) {
+	var output bytes.Buffer
+	shown := animatingProgress(t, &output, "Downloading shelf")
+	time.Sleep(150 * time.Millisecond)
+	shown.animate("Verifying shelf")
+	time.Sleep(150 * time.Millisecond)
+	shown.Stop()
+
+	text := output.String()
+	if !strings.Contains(text, "Verifying shelf") {
+		t.Fatalf("output = %q, want the relabeled frame", text)
+	}
+	// UpdateMessage repaints in place, so the old label never returns after the
+	// relabel; a restarted spinner would redraw it.
+	relabel := strings.LastIndex(text, "Verifying shelf")
+	if trailing := text[relabel:]; strings.Contains(trailing, "Downloading shelf") {
+		t.Fatalf("the old phase came back after the relabel: %q", trailing)
+	}
+}
+
 // Hide stops the animation; a later phase brings it back.
 func TestProgressHideAndShowAgain(t *testing.T) {
 	var output bytes.Buffer
@@ -184,6 +272,54 @@ func TestProgressHideAndShowAgain(t *testing.T) {
 		t.Fatalf("the second phase never animated: %q", output.String())
 	}
 }
+
+// A write failure must surface instead of being swallowed by the animation,
+// whether it hits the text itself or the newline that closes an unterminated
+// line.
+func TestProgressWritePropagatesAnError(t *testing.T) {
+	tests := []struct {
+		name   string
+		failAt int
+		data   string
+	}{
+		{name: "clear line", failAt: 1, data: "Selected shelf 1.0.0\n"},
+		{name: "text", failAt: 2, data: "Selected shelf 1.0.0\n"},
+		{name: "closing newline", failAt: 3, data: "partial"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			shown := animatingProgress(t, newFailingWriter(test.failAt), "Downloading shelf")
+			if _, err := shown.Write([]byte(test.data)); err == nil {
+				t.Fatal("write through a failing diagnostics writer succeeded")
+			}
+			shown.Stop()
+		})
+	}
+}
+
+// failingWriter succeeds until the nth write, so a test can fail one specific
+// step of the clear-line-then-write-then-close sequence.
+type failingWriter struct {
+	mu     sync.Mutex
+	writes int
+	failAt int
+}
+
+var errFailed = errors.New("diagnostics write failed")
+
+func newFailingWriter(failAt int) *failingWriter { return &failingWriter{failAt: failAt} }
+
+func (w *failingWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, errFailed
+	}
+	return len(data), nil
+}
+
+func (w *failingWriter) terminal() io.Writer { return nil }
 
 // A stopped progress must not come back to life when a later phase starts.
 func TestProgressShowAfterStopStaysStopped(t *testing.T) {
