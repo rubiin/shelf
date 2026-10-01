@@ -35,8 +35,20 @@ func colorEnabled(mode string, tty bool) bool {
 	}
 }
 
+// unwrapped reports the writer a wrapper finally writes to, so terminal and
+// color decisions see through wrappers like the progress spinner.
+func unwrapped(w io.Writer) io.Writer {
+	for {
+		wrapper, ok := w.(interface{ terminal() io.Writer })
+		if !ok {
+			return w
+		}
+		w = wrapper.terminal()
+	}
+}
+
 func isTerminal(w io.Writer) bool {
-	file, ok := w.(*os.File)
+	file, ok := unwrapped(w).(*os.File)
 	if !ok {
 		return false
 	}

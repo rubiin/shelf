@@ -499,7 +499,7 @@ func loadSourceInputs(paths Paths, diagnostics io.Writer) (sourceInputs, error) 
 	return sourceInputs{
 		Config:          cfg,
 		BaseFingerprint: baseFingerprint,
-		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Force: forceUpdate, Diagnostics: buildDiagnostics(diagnostics)},
+		Context:         lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Force: forceUpdate},
 		Shell:           string(shell),
 	}, nil
 }
@@ -597,14 +597,16 @@ func lockConfig(paths Paths, mode lock.Mode, concurrency int, diagnostics io.Wri
 	if err != nil {
 		return err
 	}
-	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Force: forceUpdate, Diagnostics: buildDiagnostics(diagnostics)}
+	context := lock.Context{ConfigFile: paths.ConfigFile, ConfigFingerprint: fingerprint, DataDirectory: paths.DataDirectory, Profile: profile, Shell: string(shell), Templates: render.ResolveTemplates(string(shell), cfg.Templates), PreviousETags: previousETags(paths), Force: forceUpdate}
 	cfg, err = applyRevisionManifest(paths, cfg, mode)
 	if err != nil {
 		return err
 	}
-	stop := startProgressSpinner(diagnostics, "Installing plugins")
+	shown := startProgressSpinner(diagnostics, "Installing plugins")
+	// Build hook output shares the terminal with the spinner, so it goes through it.
+	context.Diagnostics = buildDiagnostics(shown.Writer())
 	locked, err := lock.BuildWithConcurrency(context, cfg, source.NewInstaller(paths.DataDirectory), mode, concurrency)
-	stop()
+	shown.Stop()
 	if err != nil {
 		return err
 	}
@@ -761,9 +763,9 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	if !force {
 		if locked, valid := unlockedLock(paths, lockPath); valid {
 			unlocked(locked)
-			stop := startProgressSpinner(diagnostics, "Restoring plugins")
+			shown := startProgressSpinner(diagnostics, "Restoring plugins")
 			err := lock.Restore(locked, source.NewInstaller(paths.DataDirectory), concurrency)
-			stop()
+			shown.Stop()
 			if err != nil {
 				return err
 			}
@@ -784,9 +786,11 @@ func sourceConfig(paths Paths, output, diagnostics io.Writer, force bool, mode l
 	if err != nil {
 		return err
 	}
-	stop := startProgressSpinner(diagnostics, "Installing plugins")
+	shown := startProgressSpinner(diagnostics, "Installing plugins")
+	// Build hook output shares the terminal with the spinner, so it goes through it.
+	inputs.Context.Diagnostics = buildDiagnostics(shown.Writer())
 	locked, err := lock.BuildWithConcurrency(inputs.Context, inputs.Config, source.NewInstaller(paths.DataDirectory), mode, concurrency)
-	stop()
+	shown.Stop()
 	if err != nil {
 		return err
 	}
@@ -826,9 +830,11 @@ func updateSources(paths Paths, output, diagnostics io.Writer, concurrency int, 
 	if err := cleanUnownedSources(paths.DataDirectory, inputs.Config, newLogger(diagnostics)); err != nil {
 		return err
 	}
-	stop := startProgressSpinner(diagnostics, "Updating plugins")
+	shown := startProgressSpinner(diagnostics, "Updating plugins")
+	// Build hook output shares the terminal with the spinner, so it goes through it.
+	inputs.Context.Diagnostics = buildDiagnostics(shown.Writer())
 	locked, err := lock.BuildWithConcurrency(inputs.Context, inputs.Config, source.NewInstaller(paths.DataDirectory), lock.ModeUpdate, concurrency)
-	stop()
+	shown.Stop()
 	if err != nil {
 		return err
 	}

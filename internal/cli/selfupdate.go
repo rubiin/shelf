@@ -35,22 +35,25 @@ func newSelfUpdateCommand() *cobra.Command {
 			if quiet {
 				diagnostics = nil
 			}
-			stop := startProgressSpinner(diagnostics, "Downloading shelf")
-			result, err := runUpdate(cmd.Context(), selfupdate.Options{
+			// A phase is animated only once the work behind it starts, so the release
+			// lookup and the prompt do not spin over nothing. Diagnostics go
+			// through the progress writer so a status line clears the frame.
+			shown := newProgress(diagnostics)
+			options := selfupdate.Options{
 				CurrentVersion: Version,
 				Version:        version,
 				Force:          force,
 				Yes:            yes,
-				Confirm: func(version string) (bool, error) {
-					// The prompt needs the terminal to itself, so pause the spinner.
-					stop()
-					approved, confirmErr := confirmSelfUpdate(cmd, version)
-					stop = startProgressSpinner(diagnostics, "Downloading shelf")
-					return approved, confirmErr
-				},
-				Diagnostics: styledLines(diagnostics, ansiStatusColor),
-			})
-			stop()
+				Confirm:        func(version string) (bool, error) { return confirmSelfUpdate(cmd, version) },
+				Diagnostics:    styledLines(shown.Writer(), ansiStatusColor),
+			}
+			if spinnerEnabled(diagnostics) {
+				// An animated phase replaces its log line, so the phase is not
+				// printed twice.
+				options.Progress = shown.Show
+			}
+			result, err := runUpdate(cmd.Context(), options)
+			shown.Stop()
 			if err != nil {
 				return err
 			}
@@ -64,7 +67,7 @@ func newSelfUpdateCommand() *cobra.Command {
 	}
 	command.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
 	command.Flags().StringVar(&version, "version", "", "install a specific release tag instead of the newest")
-	command.Flags().BoolVar(&force, "force", false, "update even from a development build, an already-current release, or an install that disables self-update")
+	command.Flags().BoolVar(&force, "force", false, "update even from an already-current release or an install that disables self-update")
 	return command
 }
 

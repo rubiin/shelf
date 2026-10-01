@@ -123,8 +123,8 @@ Installations managed by a package manager (AUR, `.deb`, `.rpm`, `.apk`) should
 keep updating through the package manager instead. A packager disables
 self-update by installing a marker file, by shipping update instructions, or by
 setting `SHELF_SELF_UPDATE_AVAILABLE=false`; `self-update` then refuses and prints
-the instructions when they exist. Development builds refuse to update at all.
-Pass `--force` to override.
+the instructions when they exist. Pass `--force` to override, which also updates
+a binary that already runs the latest release.
 
 The marker file is looked up under the install prefix (the directory two levels
 above the binary, e.g. `/usr` for `/usr/bin/shelf`) at

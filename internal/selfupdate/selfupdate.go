@@ -35,8 +35,8 @@ type Options struct {
 	Version string
 	// Target defaults to the running executable.
 	Target string
-	// Force updates a development build, an install that disables self-update,
-	// and a release equal to the running version.
+	// Force updates an install that disables self-update and a release equal to
+	// the running version.
 	Force bool
 	// Confirm approves the release before the binary is replaced. A nil Confirm
 	// refuses unless Yes is set, so a caller that cannot prompt must opt in.
@@ -45,13 +45,18 @@ type Options struct {
 	Yes bool
 	// Diagnostics receives progress output; nil disables it.
 	Diagnostics io.Writer
+	// Progress announces a network-heavy phase by message, so a caller can
+	// animate only while work is in flight. It runs on the calling goroutine
+	// and must not block.
+	Progress func(message string)
 }
 
 // Result is the outcome of an update run.
 type Result struct {
 	// Updated reports whether the binary was replaced.
 	Updated bool
-	// Previous and Next bracket the update; Previous is "" for dev builds.
+	// Previous and Next bracket the update; Previous is "" or "dev" for a
+	// build with no released version.
 	Previous string
 	Next     string
 }
@@ -114,9 +119,6 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		logf(options.Diagnostics, "%s", selfUpdateDisabledMessage(prefix))
 		return Result{}, errors.New("shelf is installed via a package manager, cannot update")
 	}
-	if !options.Force && (options.CurrentVersion == "" || options.CurrentVersion == "dev") {
-		return Result{}, fmt.Errorf("self-update refused: this is a development build (%q); install a release or pass --force", displayVersion(options.CurrentVersion))
-	}
 	latest, err := selectRelease(ctx, options)
 	if err != nil {
 		return Result{}, err
@@ -146,12 +148,12 @@ func Update(ctx context.Context, options Options) (Result, error) {
 	if err := confirmUpdate(options, next); err != nil {
 		return Result{}, err
 	}
-	logf(options.Diagnostics, "Downloading %s", name)
+	announce(options, "Downloading %s", name)
 	archive, err := download(ctx, url)
 	if err != nil {
 		return Result{}, err
 	}
-	logf(options.Diagnostics, "Verifying %s", name)
+	announce(options, "Verifying %s", name)
 	checksums, ok := checksumsURL(latest)
 	if !ok {
 		return Result{}, fmt.Errorf("release %s has no checksums asset", latest.TagName)
@@ -167,14 +169,6 @@ func Update(ctx context.Context, options Options) (Result, error) {
 		return Result{}, fmt.Errorf("replace %s: %w", options.Target, err)
 	}
 	return Result{Updated: true, Previous: options.CurrentVersion, Next: next}, nil
-}
-
-// displayVersion prints an empty version as "dev".
-func displayVersion(version string) string {
-	if version == "" {
-		return "dev"
-	}
-	return version
 }
 
 // alreadyCurrent reports whether the installed binary must not be replaced by
@@ -629,4 +623,14 @@ func logf(diagnostics io.Writer, format string, arguments ...any) {
 		return
 	}
 	_, _ = fmt.Fprintf(diagnostics, format+"\n", arguments...)
+}
+
+// announce reports a network-heavy phase. An interactive caller animates it
+// instead, so the phase is not written twice; everyone else gets a line.
+func announce(options Options, format string, arguments ...any) {
+	if options.Progress != nil {
+		options.Progress(fmt.Sprintf(format, arguments...))
+		return
+	}
+	logf(options.Diagnostics, format, arguments...)
 }

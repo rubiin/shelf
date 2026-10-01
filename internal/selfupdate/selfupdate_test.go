@@ -188,28 +188,9 @@ func TestUpdateKeepsAnUpToDateBinary(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesADevelopmentBuild(t *testing.T) {
-	// Any request would mean the refusal failed to short-circuit before network use.
-	server, _ := newReleaseServer(t, "v1.0.0", nil)
-	pointAPIAt(t, server)
-	target := filepath.Join(t.TempDir(), "shelf")
-	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, current := range []string{"dev", ""} {
-		if _, err := Update(context.Background(), Options{CurrentVersion: current, Target: target}); err == nil {
-			t.Errorf("self-update with version %q succeeded", current)
-		} else if !strings.Contains(err.Error(), "development") {
-			t.Errorf("error = %v, want a development-build refusal", err)
-		}
-	}
-	if contents, err := os.ReadFile(target); err != nil || string(contents) != "old" {
-		t.Errorf("binary changed: %q, %v", contents, err)
-	}
-}
-
-func TestUpdateForceUpdatesADevelopmentBuild(t *testing.T) {
+// A development build has no released version to compare against, so it
+// updates like any other install.
+func TestUpdateUpdatesADevelopmentBuild(t *testing.T) {
 	archive := buildArchive(t, "new")
 	archiveName := archiveNameFor(t)
 	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
@@ -222,15 +203,20 @@ func TestUpdateForceUpdatesADevelopmentBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Update(context.Background(), Options{CurrentVersion: "dev", Target: target, Force: true, Yes: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.Updated || result.Next != "2.0.0" {
-		t.Fatalf("result = %+v, want an update to 2.0.0", result)
-	}
-	if contents, err := os.ReadFile(target); err != nil || string(contents) != "new" {
-		t.Errorf("binary = %q, %v, want the released binary", contents, err)
+	for _, current := range []string{"dev", ""} {
+		result, err := Update(context.Background(), Options{CurrentVersion: current, Target: target, Yes: true})
+		if err != nil {
+			t.Fatalf("self-update with version %q: %v", current, err)
+		}
+		if !result.Updated || result.Next != "2.0.0" {
+			t.Fatalf("result = %+v, want an update to 2.0.0", result)
+		}
+		if contents, err := os.ReadFile(target); err != nil || string(contents) != "new" {
+			t.Fatalf("binary = %q, %v, want the released binary", contents, err)
+		}
+		if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -279,6 +265,45 @@ func TestUpdateInstallsTheLatestRelease(t *testing.T) {
 	}
 	if !strings.Contains(diagnostics.String(), "Downloading "+archiveName) {
 		t.Errorf("diagnostics = %q, want a download status", diagnostics.String())
+	}
+}
+
+// An animated phase replaces its log line, so Progress reports each phase and
+// Diagnostics stays free of them.
+func TestUpdateReportsPhasesToProgress(t *testing.T) {
+	archive := buildArchive(t, "new")
+	archiveName := archiveNameFor(t)
+	server, _ := newReleaseServer(t, "v2.0.0", map[string]string{
+		archiveName:     string(archive),
+		"checksums.txt": checksumLine(t, archiveName, archive),
+	})
+	pointAPIAt(t, server)
+	target := filepath.Join(t.TempDir(), "shelf")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var diagnostics bytes.Buffer
+	var phases []string
+
+	result, err := Update(context.Background(), Options{
+		CurrentVersion: "1.0.0",
+		Target:         target,
+		Diagnostics:    &diagnostics,
+		Progress:       func(message string) { phases = append(phases, message) },
+		Yes:            true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Updated {
+		t.Fatal("self-update reported no update")
+	}
+	want := []string{"Downloading " + archiveName, "Verifying " + archiveName}
+	if !slices.Equal(phases, want) {
+		t.Errorf("phases = %q, want %q", phases, want)
+	}
+	if strings.Contains(diagnostics.String(), "Downloading") || strings.Contains(diagnostics.String(), "Verifying") {
+		t.Errorf("diagnostics = %q, want the phases animated rather than logged", diagnostics.String())
 	}
 }
 
@@ -925,14 +950,11 @@ func TestUpdatePreservesASymlinkedTarget(t *testing.T) {
 	}
 }
 
-// TestUpdateFailsWithoutAnExplicitTarget requires a development build to be
-// refused even when no target is given, which resolves (and keeps) the running
-// binary before the refusal.
+// TestUpdateFailsWithoutAnExplicitTarget requires a run with no target to fail
+// while resolving the running binary, before any release lookup.
 func TestUpdateFailsWithoutAnExplicitTarget(t *testing.T) {
 	if _, err := Update(context.Background(), Options{CurrentVersion: "dev"}); err == nil {
-		t.Fatal("self-update with a dev version and no target succeeded")
-	} else if !strings.Contains(err.Error(), "development") {
-		t.Errorf("error = %v, want a development-build refusal", err)
+		t.Fatal("self-update with no target succeeded")
 	}
 }
 
