@@ -347,3 +347,25 @@ func TestProgressShowAfterStopStaysStopped(t *testing.T) {
 		t.Fatalf("progress animated after Stop: %q", output.String())
 	}
 }
+
+// Regression test for a deadlock: halt used to wait for the animation loop
+// while still holding the mutex, so a frame arriving in that window left
+// Stop waiting forever. The loop must finish even under tight timing.
+func TestProgressStopDoesNotDeadlockWithAFrameInFlight(t *testing.T) {
+	original := spinnerInterval
+	spinnerInterval = time.Millisecond
+	t.Cleanup(func() { spinnerInterval = original })
+
+	for i := 0; i < 200; i++ {
+		var output bytes.Buffer
+		shown := animatingProgress(t, &output, "Downloading shelf")
+		time.Sleep(2 * time.Millisecond)
+		done := make(chan struct{})
+		go func() { shown.Stop(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Stop deadlocked", i)
+		}
+	}
+}

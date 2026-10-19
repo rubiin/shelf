@@ -8,10 +8,12 @@ import (
 	"time"
 )
 
+// spinnerInterval is how often a new frame replaces the last; fast enough to
+// read as motion, slow enough not to flood a terminal over ssh. It is a
+// variable so tests can shorten it when stressing the animation loop.
+var spinnerInterval = 100 * time.Millisecond
+
 const (
-	// spinnerInterval is how often a new frame replaces the last; fast enough
-	// to read as motion, slow enough not to flood a terminal over ssh.
-	spinnerInterval = 100 * time.Millisecond
 	// ansiEraseLine returns to column one and erases to the end, which is how
 	// a frame is replaced or removed without disturbing earlier lines.
 	ansiEraseLine = "\r\033[K"
@@ -143,15 +145,20 @@ func (p *progress) Stop() {
 }
 
 // halt stops the animation and ends its line, so whatever prints next starts
-// fresh instead of continuing the frame; the caller holds mu.
+// fresh instead of continuing the frame; the caller holds mu on entry and
+// again on return.
 func (p *progress) halt() {
 	if !p.running {
 		return
 	}
 	p.running = false
 	close(p.stop)
-	// Wait for the loop so it cannot paint over the erase below.
-	<-p.done
+	done := p.done
+	// The loop may be waiting on mu to paint a frame it already drew, so the
+	// lock must be dropped while waiting for it or the two deadlock.
+	p.mu.Unlock()
+	<-done
+	p.mu.Lock()
 	if _, err := fmt.Fprint(p.diagnostics, ansiEraseLine, "\n"); err != nil {
 		return
 	}
